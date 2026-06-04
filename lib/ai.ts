@@ -32,8 +32,10 @@ export async function generateChatReply(params: {
     temperature: 0.75
   });
 
+  const ctx = { baseURL, apiKey, model };
+
   const parsed = parseStructuredReply(rawContent);
-  if (parsed) return parsed;
+  if (parsed) return ensureReplyCompleteness(parsed, ctx);
 
   const repaired = await requestChatCompletion({
     baseURL,
@@ -52,9 +54,83 @@ export async function generateChatReply(params: {
   });
 
   const repairedParsed = parseStructuredReply(repaired);
-  if (repairedParsed) return repairedParsed;
+  if (repairedParsed) return ensureReplyCompleteness(repairedParsed, ctx);
 
   throw new Error('AI provider returned non-JSON content.');
+}
+
+async function ensureReplyCompleteness(
+  reply: ChatReplyPayload,
+  ctx: { baseURL: string; apiKey: string; model: string }
+): Promise<ChatReplyPayload> {
+  const result: ChatReplyPayload = {
+    ...reply,
+    vocabulary_notes: [...reply.vocabulary_notes]
+  };
+
+  if (!containsChinese(result.translation_zh)) {
+    const zh = await requestChatCompletion({
+      ...ctx,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Translate the Korean chat message into natural Simplified Chinese. Return only the Chinese translation. No Korean, no JSON, no labels, no quotation marks.'
+        },
+        { role: 'user', content: result.reply }
+      ],
+      preferJsonMode: false,
+      temperature: 0.2
+    });
+    result.translation_zh = extractChineseOnly(zh) || zh.trim();
+  }
+
+  if (result.vocabulary_notes.length < 2 && containsHangul(result.reply)) {
+    const vocabRaw = await requestChatCompletion({
+      ...ctx,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Extract 3 to 5 useful Korean vocabulary notes from the message for Chinese learners. Return JSON only: {"vocabulary_notes":[{"term":"Korean word or short phrase","romanization":"Latin pronunciation","explanation_zh":"Simplified Chinese meaning and usage"}]}.'
+        },
+        { role: 'user', content: result.reply }
+      ],
+      preferJsonMode: true,
+      temperature: 0.25
+    });
+    const vocabParsed = parseStructuredReply(vocabRaw);
+    if (vocabParsed?.vocabulary_notes.length) {
+      result.vocabulary_notes = vocabParsed.vocabulary_notes;
+    }
+  }
+
+  if (!result.romanization.trim() && containsHangul(result.reply)) {
+    const rom = await requestChatCompletion({
+      ...ctx,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Write the Korean pronunciation in Latin letters (romanization) only. No Korean characters, no Chinese, no labels.'
+        },
+        { role: 'user', content: result.reply }
+      ],
+      preferJsonMode: false,
+      temperature: 0.2
+    });
+    result.romanization = sanitizeRomanization(rom) || rom.trim();
+  }
+
+  return result;
+}
+
+function extractChineseOnly(text: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => stripKnownPrefix(line.trim()))
+    .filter((line) => containsChinese(line));
+  return lines.join('\n').trim();
 }
 
 function buildSystemPrompt(persona: string, nickname: string) {
@@ -251,6 +327,23 @@ function parseStructuredReply(rawContent: string): ChatReplyPayload | null {
 }
 
 function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload | null {
+  const nestedReply = value.reply;
+  if (nestedReply && typeof nestedReply === 'object') {
+    return normalizeReplyObject(nestedReply as Record<string, unknown>);
+  }
+  if (typeof nestedReply === 'string') {
+    const trimmed = nestedReply.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        const inner = JSON.parse(extractFirstJSONObject(trimmed) ?? trimmed) as Record<string, unknown>;
+        const fromInner = normalizeReplyObject(inner);
+        if (fromInner) return fromInner;
+      } catch {
+        // fall through and treat as plain Korean reply text
+      }
+    }
+  }
+
   const reply = pickString(value, ['reply', 'original', 'original_ko', 'korean', 'text', 'message']);
   if (!reply) return null;
 
