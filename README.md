@@ -33,26 +33,26 @@ The profile count is usually enforced in the app UI. The backend enforces AI/TTS
 2. Add Vercel Postgres or connect Neon/Supabase Postgres.
 3. Add the environment variables from `.env.example`.
 4. Run the SQL in `migrations/001_init.sql` against your database.
-5. Deploy.
+5. Run `migrations/002_subscription_unique.sql` after `001_init.sql` (required for Apple subscription upsert).
+6. Deploy.
 
 ## Required Environment Variables
 
-See `.env.example`.
+See `.env.example`. The backend accepts **either** the names below or their legacy aliases (both work).
 
-Important variables:
+| You configure (recommended) | Code alias (also accepted) |
+|---|---|
+| `DATABASE_URL` | `POSTGRES_URL` |
+| `LLM_API_BASE_URL` | `AI_API_BASE_URL` |
+| `LLM_API_KEY` | `AI_API_KEY` |
+| `LLM_MODEL` | `AI_TEXT_MODEL` |
+| `APPLE_BUNDLE_ID` | `AIDOL_BUNDLE_ID` |
+| `APPLE_MONTHLY_PRODUCT_ID` | `AIDOL_PRODUCT_MONTHLY` |
+| `APPLE_YEARLY_PRODUCT_ID` | `AIDOL_PRODUCT_YEARLY` |
 
-- `POSTGRES_URL`
-- `APPLE_ISSUER_ID`
-- `APPLE_KEY_ID`
-- `APPLE_PRIVATE_KEY`
-- `APPLE_ENVIRONMENT`
-- `AIDOL_BUNDLE_ID`
-- `AI_API_BASE_URL`
-- `AI_API_KEY`
-- `AI_TEXT_MODEL`
-- `DASHSCOPE_API_KEY`
-- `DASHSCOPE_REGION`
-- `DASHSCOPE_TTS_VC_MODEL`
+Also required: `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`, `DASHSCOPE_API_KEY`.
+
+Optional: `APPLE_ENVIRONMENT`, `DASHSCOPE_REGION`, `DASHSCOPE_TTS_VC_MODEL`, `FREE_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_TTS_LIMIT`, `MEMBER_MONTHLY_VOICE_CLONE_LIMIT`.
 
 ## API Endpoints
 

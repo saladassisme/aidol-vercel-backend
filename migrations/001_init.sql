@@ -18,7 +18,9 @@ create table if not exists subscriptions (
 );
 
 create index if not exists idx_subscriptions_user_id on subscriptions(user_id);
-create index if not exists idx_subscriptions_original_transaction_id on subscriptions(original_transaction_id);
+create unique index if not exists idx_subscriptions_original_transaction_id_unique
+  on subscriptions (original_transaction_id)
+  where original_transaction_id is not null;
 
 create table if not exists daily_usage (
   user_id uuid not null references users(id) on delete cascade,

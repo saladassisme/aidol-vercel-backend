@@ -35,6 +35,46 @@ export async function generateChatReply(params: {
   const content = json.choices?.[0]?.message?.content;
   if (!content) throw new Error('AI provider returned empty content.');
 
-  const cleaned = String(content).replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
-  return JSON.parse(cleaned);
+  const cleaned = stripMarkdownCodeFence(String(content));
+  const jsonCandidate = extractFirstJSONObject(cleaned) ?? cleaned;
+
+  try {
+    return JSON.parse(jsonCandidate);
+  } catch {
+    throw new Error('AI provider returned non-JSON content.');
+  }
+}
+
+function stripMarkdownCodeFence(text: string) {
+  let result = text.trim();
+  if (!result.startsWith('```')) return result;
+  result = result.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+  return result;
+}
+
+function extractFirstJSONObject(text: string) {
+  const trimmed = text.trim();
+  const start = trimmed.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return trimmed.slice(start, i + 1);
+    }
+  }
+  return null;
 }

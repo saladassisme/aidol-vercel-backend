@@ -1,3 +1,4 @@
+import './pg-env';
 import { sql } from '@vercel/postgres';
 
 export { sql };

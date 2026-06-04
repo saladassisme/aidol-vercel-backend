@@ -85,5 +85,20 @@ export async function upsertSubscriptionFromApple(userId: string, info: AppleTra
       updated_at = now()
   `;
 
+  if (isActive) {
+    const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
+    const yearly = optionalEnv('AIDOL_PRODUCT_YEARLY', 'aidol.membership.yearly');
+    if (info.productId === yearly) {
+      await sql`
+        update subscriptions
+        set status = 'inactive', updated_at = now()
+        where user_id = ${userId}
+          and product_id = ${monthly}
+          and status = 'active'
+          and original_transaction_id is distinct from ${original}
+      `;
+    }
+  }
+
   return { isActive, productId: info.productId, expiresAt: expires, originalTransactionId: original };
 }
