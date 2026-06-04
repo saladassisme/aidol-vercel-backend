@@ -37,6 +37,18 @@ The profile count is usually enforced in the app UI. The backend enforces AI/TTS
 5. Run `migrations/002_subscription_unique.sql` after `001_init.sql` (required for Apple subscription upsert).
 6. Deploy.
 
+### Verify deployment (important)
+
+After deploy, run:
+
+```bash
+curl -sS "https://YOUR-PROJECT.vercel.app/api/v1/health"
+```
+
+You should see `"dbDriver":"postgres-js"`. If you still get `VercelPostgresError` on `/api/v1/quota/status`, the live deployment is **old** — open Vercel → Deployments, confirm the latest commit is **Ready**, and Redeploy with **Clear build cache**.
+
+If `health` shows `"mode":"direct"`, change `DATABASE_URL` to the Supabase **Transaction pooler** URI (port 6543).
+
 ## Required Environment Variables
 
 See `.env.example`. The backend accepts **either** the names below or their legacy aliases (both work).
