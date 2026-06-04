@@ -20,21 +20,23 @@ function limitFor(kind: UsageKind, limits: Awaited<ReturnType<typeof getMembersh
 }
 
 export async function getTodayUsage(userId: string) {
-  const result = await sql<{
+  await sql`
+    insert into daily_usage (user_id, usage_date)
+    values (${userId}, current_date)
+    on conflict (user_id, usage_date) do nothing
+  `;
+
+  const rows = await sql<{
     chat_reply_count: number;
     tts_count: number;
     voice_clone_count: number;
-  }>`
-    insert into daily_usage (user_id, usage_date)
-    values (${userId}, current_date)
-    on conflict (user_id, usage_date) do nothing;
-
+  }[]>`
     select chat_reply_count, tts_count, voice_clone_count
     from daily_usage
     where user_id = ${userId} and usage_date = current_date
     limit 1
   `;
-  return result.rows[result.rows.length - 1] ?? { chat_reply_count: 0, tts_count: 0, voice_clone_count: 0 };
+  return rows[0] ?? { chat_reply_count: 0, tts_count: 0, voice_clone_count: 0 };
 }
 
 export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {

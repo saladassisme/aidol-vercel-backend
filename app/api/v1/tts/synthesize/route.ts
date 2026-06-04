@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const model = body.model || process.env.DASHSCOPE_TTS_VC_MODEL || 'qwen3-tts-vc-2026-01-22';
     const textHash = await sha256Hex(`${body.voiceId}\n${model}\n${body.text}`);
 
-    const cached = await sql<{ audio_url: string }>`
+    const cached = await sql<{ audio_url: string }[]>`
       select audio_url from tts_cache
       where user_id = ${auth.userId}
         and voice_id = ${body.voiceId}
@@ -36,8 +36,8 @@ export async function POST(request: Request) {
       limit 1
     `;
 
-    if (cached.rows[0]) {
-      return ok({ audioUrl: cached.rows[0].audio_url, cached: true });
+    if (cached[0]) {
+      return ok({ audioUrl: cached[0].audio_url, cached: true });
     }
 
     await assertAndConsumeQuota(auth.userId, 'tts');

@@ -42,11 +42,11 @@ export async function getMembership(userId: string): Promise<MembershipState> {
   const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
   const yearly = optionalEnv('AIDOL_PRODUCT_YEARLY', 'aidol.membership.yearly');
 
-  const result = await sql<{
+  const rows = await sql<{
     product_id: string;
     expires_at: string | null;
     status: string;
-  }>`
+  }[]>`
     select product_id, expires_at, status
     from subscriptions
     where user_id = ${userId}
@@ -62,7 +62,7 @@ export async function getMembership(userId: string): Promise<MembershipState> {
     limit 1
   `;
 
-  const row = result.rows[0];
+  const row = rows[0];
   const isMember = Boolean(row);
   const plan = !row ? 'free' : row.product_id === yearly ? 'yearly' : row.product_id === monthly ? 'monthly' : 'monthly';
 

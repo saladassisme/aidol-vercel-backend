@@ -30,8 +30,9 @@ The profile count is usually enforced in the app UI. The backend enforces AI/TTS
 ## Deploy to Vercel
 
 1. Create a Vercel project.
-2. Add Vercel Postgres or connect Neon/Supabase Postgres.
-3. Add the environment variables from `.env.example`.
+2. Connect **Supabase** Postgres.
+3. Set `DATABASE_URL` to Supabase **Transaction pooler** URI (port **6543**, not the direct `db.*.supabase.co:5432` URI). In Supabase: **Connect → ORMs → URI → Mode: Transaction**.
+4. Add the environment variables from `.env.example`.
 4. Run the SQL in `migrations/001_init.sql` against your database.
 5. Run `migrations/002_subscription_unique.sql` after `001_init.sql` (required for Apple subscription upsert).
 6. Deploy.
