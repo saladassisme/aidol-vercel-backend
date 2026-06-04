@@ -95,6 +95,7 @@ async function requestChatCompletion(params: {
     const body: Record<string, unknown> = {
       model: params.model,
       temperature: params.temperature,
+      max_tokens: 900,
       messages: params.messages
     };
     if (useJsonMode) body.response_format = { type: 'json_object' };
@@ -112,22 +113,116 @@ async function requestChatCompletion(params: {
     return { response, text };
   };
 
-  let { response, text } = await attempt(Boolean(params.preferJsonMode));
-  if (!response.ok && params.preferJsonMode && shouldRetryWithoutJsonMode(response.status, text)) {
-    ({ response, text } = await attempt(false));
-  }
-  if (!response.ok) throw new Error(`AI provider failed: HTTP ${response.status} ${text}`);
+  const attempts: boolean[] = params.preferJsonMode ? [true, false] : [false];
 
-  let envelope: { choices?: Array<{ message?: { content?: string } }> };
-  try {
-    envelope = JSON.parse(text);
-  } catch {
-    throw new Error(`AI provider returned invalid envelope: ${text.slice(0, 200)}`);
+  let lastEmptyDetail = 'unknown';
+  for (let i = 0; i < attempts.length; i += 1) {
+    const useJsonMode = attempts[i];
+    let { response, text } = await attempt(useJsonMode);
+
+    if (!response.ok && useJsonMode && shouldRetryWithoutJsonMode(response.status, text)) {
+      continue;
+    }
+    if (!response.ok) throw new Error(`AI provider failed: HTTP ${response.status} ${text}`);
+
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(text);
+    } catch {
+      throw new Error(`AI provider returned invalid envelope: ${text.slice(0, 200)}`);
+    }
+
+    const content = extractAssistantContent(envelope);
+    if (content) return content;
+
+    lastEmptyDetail = describeEmptyCompletion(envelope);
+    if (!useJsonMode) break;
   }
 
-  const content = envelope.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error('AI provider returned empty content.');
-  return content;
+  throw new Error(`AI provider returned empty content (${lastEmptyDetail}).`);
+}
+
+function extractAssistantContent(envelope: unknown): string {
+  if (!envelope || typeof envelope !== 'object') return '';
+
+  const root = envelope as Record<string, unknown>;
+
+  if (typeof root.output_text === 'string' && root.output_text.trim()) {
+    return root.output_text.trim();
+  }
+
+  const choices = root.choices;
+  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') return '';
+
+  const choice = choices[0] as Record<string, unknown>;
+  const message =
+    choice.message && typeof choice.message === 'object'
+      ? (choice.message as Record<string, unknown>)
+      : null;
+
+  if (message) {
+    const fromContent = extractContentValue(message.content);
+    if (fromContent) return fromContent;
+
+    const fromToolCalls = extractToolCallArguments(message.tool_calls);
+    if (fromToolCalls) return fromToolCalls;
+
+    const fallback = pickString(message, ['text', 'output_text']);
+    if (fallback) return fallback;
+  }
+
+  const choiceText = pickString(choice, ['text', 'content']);
+  return choiceText ?? '';
+}
+
+function extractContentValue(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part === 'string') {
+      parts.push(part);
+      continue;
+    }
+    if (!part || typeof part !== 'object') continue;
+    const item = part as Record<string, unknown>;
+    if (typeof item.text === 'string') parts.push(item.text);
+    else if (typeof item.content === 'string') parts.push(item.content);
+  }
+  return parts.join('\n').trim();
+}
+
+function extractToolCallArguments(toolCalls: unknown): string {
+  if (!Array.isArray(toolCalls)) return '';
+
+  for (const call of toolCalls) {
+    if (!call || typeof call !== 'object') continue;
+    const fn = (call as Record<string, unknown>).function;
+    if (!fn || typeof fn !== 'object') continue;
+    const args = (fn as Record<string, unknown>).arguments;
+    if (typeof args === 'string' && args.trim()) return args.trim();
+  }
+  return '';
+}
+
+function describeEmptyCompletion(envelope: unknown): string {
+  if (!envelope || typeof envelope !== 'object') return 'no envelope';
+  const root = envelope as Record<string, unknown>;
+  const choices = root.choices;
+  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') {
+    return 'no choices';
+  }
+  const choice = choices[0] as Record<string, unknown>;
+  const finish = typeof choice.finish_reason === 'string' ? choice.finish_reason : 'n/a';
+  const message =
+    choice.message && typeof choice.message === 'object'
+      ? (choice.message as Record<string, unknown>)
+      : null;
+  const role = message && typeof message.role === 'string' ? message.role : 'n/a';
+  const refusal =
+    message && typeof message.refusal === 'string' ? message.refusal.slice(0, 80) : '';
+  return `finish_reason=${finish}, role=${role}${refusal ? `, refusal=${refusal}` : ''}`;
 }
 
 function shouldRetryWithoutJsonMode(status: number, body: string) {
