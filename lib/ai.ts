@@ -28,7 +28,7 @@ export async function generateChatReply(params: {
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...params.messages.slice(-12)],
-    preferJsonMode: false,
+    preferJsonMode: true,
     temperature: 0.75
   });
 
@@ -63,9 +63,13 @@ async function ensureReplyCompleteness(
   reply: ChatReplyPayload,
   ctx: { baseURL: string; apiKey: string; model: string }
 ): Promise<ChatReplyPayload> {
+  const normalized = repairMisplacedFields(reply);
   const result: ChatReplyPayload = {
-    ...reply,
-    vocabulary_notes: [...reply.vocabulary_notes]
+    ...normalized,
+    reply: extractKoreanOnly(normalized.reply),
+    translation_zh: extractChineseOnly(normalized.translation_zh),
+    romanization: sanitizeRomanization(normalized.romanization),
+    vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
   if (!containsChinese(result.translation_zh)) {
@@ -119,15 +123,29 @@ async function ensureReplyCompleteness(
     result.romanization = '';
   }
 
-  return result;
+  return finalizeReplyPayload(result);
 }
 
 function extractChineseOnly(text: string) {
   const lines = text
     .split(/\r?\n/)
     .map((line) => stripKnownPrefix(line.trim()))
-    .filter((line) => containsChinese(line));
+    .filter(
+      (line) =>
+        containsChinese(line) &&
+        !containsHangul(line) &&
+        !looksLikeModelReasoning(line) &&
+        !isPrimarilyEnglish(line)
+    );
   return lines.join('\n').trim();
+}
+
+function isPrimarilyEnglish(line: string) {
+  const letters = [...line.replace(/\s/g, '')];
+  if (!letters.length) return false;
+  const latin = letters.filter((ch) => /[A-Za-z]/.test(ch)).length;
+  const chinese = letters.filter((ch) => /[\u3400-\u9FFF]/.test(ch)).length;
+  return latin > chinese * 2 && latin / letters.length > 0.55;
 }
 
 function buildSystemPrompt(persona: string, nickname: string) {
@@ -138,22 +156,130 @@ Character nickname (display only): ${nickname}
 Persona:
 ${persona}
 
+Field separation (critical — do not mix languages across fields):
+- "reply" = 原文：仅韩文（Hangul），可含表情符号，禁止中文、禁止英文、禁止罗马音。
+- "translation_zh" = 中文翻译：仅简体中文，禁止韩文、禁止英文。
+- "romanization" = 罗马音：仅拉丁字母发音，禁止韩文、禁止中文、禁止英文说明。
+- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的韩文词或短短语（≤10字），禁止整句；explanation_zh 用中文释义。
+
 Output rules:
-- Return a single JSON object only.
-- Do not wrap JSON in markdown code fences.
+- Return one JSON object only. No markdown.
 - Schema:
 {
-  "reply": "Korean original message only",
-  "translation_zh": "Simplified Chinese translation (must contain Chinese characters)",
-  "romanization": "Korean pronunciation in Latin letters only",
+  "reply": "韩文原文",
+  "translation_zh": "中文翻译",
+  "romanization": "latin romanization",
   "vocabulary_notes": [
-    {"term":"Korean word","romanization":"Latin","explanation_zh":"Chinese explanation"}
+    {"term":"韩文词","romanization":"latin","explanation_zh":"中文释义"}
   ]
+}`;
 }
-- reply must be Korean only.
-- translation_zh is required and must not be empty.
-- romanization is required.
-- Include 2 to 5 vocabulary_notes from the Korean reply.`;
+
+function finalizeReplyPayload(payload: ChatReplyPayload): ChatReplyPayload {
+  const repaired = repairMisplacedFields(payload);
+  const reply = extractKoreanOnly(repaired.reply);
+  const translation_zh = extractChineseOnly(repaired.translation_zh);
+  let romanization = sanitizeRomanization(repaired.romanization);
+  if (looksLikeModelReasoning(romanization)) romanization = '';
+
+  const vocabulary_notes = sanitizeVocabularyNotes(repaired.vocabulary_notes, reply);
+
+  return {
+    reply,
+    translation_zh,
+    romanization,
+    vocabulary_notes
+  };
+}
+
+/** Fix common model mistakes (fields swapped or JSON stuffed into reply). */
+function repairMisplacedFields(payload: ChatReplyPayload): ChatReplyPayload {
+  const embedded = tryParseEmbeddedReplyJson(payload.reply);
+  if (embedded) {
+    return {
+      reply: embedded.reply || payload.reply,
+      translation_zh: embedded.translation_zh || payload.translation_zh,
+      romanization: embedded.romanization || payload.romanization,
+      vocabulary_notes:
+        embedded.vocabulary_notes.length > 0 ? embedded.vocabulary_notes : payload.vocabulary_notes
+    };
+  }
+
+  let { reply, translation_zh, romanization, vocabulary_notes } = payload;
+
+  const replyHangul = hangulRatio(reply);
+  const translationHangul = hangulRatio(translation_zh);
+  const translationChinese = chineseRatio(translation_zh);
+  const replyChinese = chineseRatio(reply);
+
+  if (replyChinese > 0.35 && replyHangul < 0.15 && translationHangul > 0.2) {
+    [reply, translation_zh] = [translation_zh, reply];
+  } else if (!containsHangul(reply) && containsHangul(translation_zh)) {
+    [reply, translation_zh] = [translation_zh, reply];
+  }
+
+  const romLatin = latinLetterRatio(romanization);
+  const romChinese = chineseRatio(romanization);
+  const transLatin = latinLetterRatio(translation_zh);
+
+  if (romChinese > 0.2 && transLatin > 0.35 && translationChinese < 0.2) {
+    [translation_zh, romanization] = [romanization, translation_zh];
+  } else if (containsHangul(romanization) && !containsHangul(reply)) {
+    reply = extractKoreanOnly(romanization);
+    romanization = '';
+  } else if (romLatin > 0.45 && translationChinese > 0.25 && transLatin < 0.15) {
+    [translation_zh, romanization] = [romanization, translation_zh];
+  }
+
+  return { reply, translation_zh, romanization, vocabulary_notes };
+}
+
+function tryParseEmbeddedReplyJson(text: string): ChatReplyPayload | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return null;
+  const parsed = parseStructuredReply(trimmed);
+  if (!parsed || !containsHangul(parsed.reply)) return null;
+  return parsed;
+}
+
+function hangulRatio(text: string) {
+  const chars = [...text.replace(/\s/g, '')];
+  if (!chars.length) return 0;
+  const hangul = chars.filter((ch) => /[\uAC00-\uD7AF]/.test(ch)).length;
+  return hangul / chars.length;
+}
+
+function chineseRatio(text: string) {
+  const chars = [...text.replace(/\s/g, '')];
+  if (!chars.length) return 0;
+  const chinese = chars.filter((ch) => /[\u3400-\u9FFF]/.test(ch)).length;
+  return chinese / chars.length;
+}
+
+function latinLetterRatio(text: string) {
+  const chars = [...text.replace(/\s/g, '')];
+  if (!chars.length) return 0;
+  const latin = chars.filter((ch) => /[A-Za-z]/.test(ch)).length;
+  return latin / chars.length;
+}
+
+function extractKoreanOnly(text: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => stripKnownPrefix(line.trim()))
+    .filter((line) => line && containsHangul(line) && !isPrimarilyChinese(line));
+
+  const joined = lines.join('\n').trim();
+  if (joined) return joined;
+
+  const hangulOnly = text.replace(/[^\uAC00-\uD7AF\s!?.,…~ㅋㅎㅠㅜ😼😊❤️]+/gu, ' ');
+  return hangulOnly.replace(/\s+/g, ' ').trim();
+}
+
+function isPrimarilyChinese(line: string) {
+  const hangul = (line.match(/[\uAC00-\uD7AF]/g) || []).length;
+  const chinese = (line.match(/[\u3400-\u9FFF]/g) || []).length;
+  return chinese > 0 && chinese >= hangul;
 }
 
 type ChatCompletionParams = {
@@ -479,11 +605,14 @@ function sanitizeVocabularyNotes(
     const explanation_zh =
       pickString(obj, ['explanation_zh', 'explanation', 'meaning', 'meaning_zh', 'zh', 'note', 'usage']) ?? '';
     const romanization = pickString(obj, ['romanization', 'romaja', 'pronunciation', 'reading', 'latin']) ?? '';
-    if (!term || !explanation_zh || seen.has(term)) continue;
+    const cleanedExplanation = extractChineseOnly(explanation_zh) || explanation_zh.trim();
+    if (!term || !cleanedExplanation || seen.has(term)) continue;
     if (!isValidVocabularyTerm(term, fullReply)) continue;
-    if (isGenericVocabularyExplanation(explanation_zh)) continue;
+    if (isGenericVocabularyExplanation(cleanedExplanation)) continue;
+    if (looksLikeModelReasoning(cleanedExplanation)) continue;
     seen.add(term);
-    notes.push({ term, romanization, explanation_zh });
+    const noteRom = sanitizeRomanization(romanization);
+    notes.push({ term: extractKoreanOnly(term) || term, romanization: noteRom, explanation_zh: cleanedExplanation });
   }
 
   return notes.slice(0, 6);
@@ -534,12 +663,7 @@ function pickString(obj: Record<string, unknown>, keys: string[]) {
 }
 
 function sanitizeKoreanReply(text: string) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => stripKnownPrefix(line.trim()))
-    .filter((line) => line && (containsHangul(line) || !containsChinese(line)))
-    .join('\n')
-    .trim();
+  return extractKoreanOnly(text);
 }
 
 function looksLikeModelReasoning(text: string) {
