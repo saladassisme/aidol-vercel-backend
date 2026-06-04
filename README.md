@@ -65,7 +65,9 @@ See `.env.example`. The backend accepts **either** the names below or their lega
 
 Also required: `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`, `DASHSCOPE_API_KEY`.
 
-Optional: `APPLE_ENVIRONMENT`, `DASHSCOPE_REGION`, `DASHSCOPE_TTS_VC_MODEL`, `FREE_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_TTS_LIMIT`, `MEMBER_MONTHLY_VOICE_CLONE_LIMIT`.
+Optional: `APPLE_ENVIRONMENT` (`sandbox` or `production`; the server will try both when verifying transactions), `DASHSCOPE_REGION`, `DASHSCOPE_TTS_VC_MODEL`, `FREE_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_TTS_LIMIT`, `MEMBER_MONTHLY_VOICE_CLONE_LIMIT`.
+
+**Apple keys checklist:** `AIDOL_BUNDLE_ID` must be `come.aidol.aidol`, product IDs must match the app, and `APPLE_PRIVATE_KEY` / `APPLE_ISSUER_ID` / `APPLE_KEY_ID` must be valid for App Store Connect API.
 
 ## API Endpoints
 

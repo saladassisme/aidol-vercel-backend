@@ -44,28 +44,69 @@ export type AppleTransactionInfo = {
   revocationDate?: number | string;
 };
 
-export async function fetchAppleTransactionInfo(transactionId: string): Promise<AppleTransactionInfo> {
-  const env = optionalEnv('APPLE_ENVIRONMENT', 'sandbox');
-  const baseURL = env === 'production'
+type AppleStoreEnvironment = 'sandbox' | 'production';
+
+function appleStoreBaseURL(environment: AppleStoreEnvironment) {
+  return environment === 'production'
     ? 'https://api.storekit.itunes.apple.com'
     : 'https://api.storekit-sandbox.itunes.apple.com';
+}
 
+function shouldRetryAppleEnvironment(status: number, body: string) {
+  if (status === 404) return true;
+  const lower = body.toLowerCase();
+  return (
+    lower.includes('transaction id not found') ||
+    lower.includes('not found') ||
+    lower.includes('404000')
+  );
+}
+
+async function fetchAppleTransactionInfoInEnvironment(
+  transactionId: string,
+  environment: AppleStoreEnvironment
+): Promise<AppleTransactionInfo> {
   const token = await appStoreJWT();
-  const response = await fetch(`${baseURL}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const response = await fetch(
+    `${appleStoreBaseURL(environment)}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`Apple transaction verification failed: HTTP ${response.status} ${text}`);
+    const error = new Error(
+      `[${environment}] Apple transaction verification failed: HTTP ${response.status} ${text}`
+    );
+    if (shouldRetryAppleEnvironment(response.status, text)) {
+      (error as Error & { retryable?: boolean }).retryable = true;
+    }
+    throw error;
   }
 
   const json = JSON.parse(text) as { signedTransactionInfo?: string };
   if (!json.signedTransactionInfo) {
-    throw new Error('Apple response did not include signedTransactionInfo.');
+    throw new Error(`[${environment}] Apple response did not include signedTransactionInfo.`);
   }
 
   return decodeJWSPayload<AppleTransactionInfo>(json.signedTransactionInfo);
+}
+
+/** Tries configured environment first, then the other (sandbox ↔ production). */
+export async function fetchAppleTransactionInfo(transactionId: string): Promise<AppleTransactionInfo> {
+  const preferred = optionalEnv('APPLE_ENVIRONMENT', 'sandbox') as AppleStoreEnvironment;
+  const environments: AppleStoreEnvironment[] =
+    preferred === 'production' ? ['production', 'sandbox'] : ['sandbox', 'production'];
+
+  let lastError: Error | null = null;
+  for (const environment of environments) {
+    try {
+      return await fetchAppleTransactionInfoInEnvironment(transactionId, environment);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw lastError ?? new Error('Apple transaction verification failed.');
 }
 
 export async function upsertSubscriptionFromApple(userId: string, info: AppleTransactionInfo) {
