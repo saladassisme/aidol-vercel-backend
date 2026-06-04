@@ -85,26 +85,12 @@ async function ensureReplyCompleteness(
     if (zh) result.translation_zh = extractChineseOnly(zh) || zh.trim();
   }
 
-  if (result.vocabulary_notes.length < 2 && containsHangul(result.reply)) {
-    const vocabRaw = await tryChatCompletion({
-      ...ctx,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Extract 3 to 5 useful Korean vocabulary notes from the message for Chinese learners. Return JSON only: {"vocabulary_notes":[{"term":"Korean word or short phrase","romanization":"Latin pronunciation","explanation_zh":"Simplified Chinese meaning and usage"}]}.'
-        },
-        { role: 'user', content: result.reply }
-      ],
-      preferJsonMode: false,
-      temperature: 0.25
-    });
-    if (vocabRaw) {
-      const vocabParsed = parseStructuredReply(vocabRaw);
-      if (vocabParsed?.vocabulary_notes.length) {
-        result.vocabulary_notes = vocabParsed.vocabulary_notes;
-      }
-    }
+  const validNotes = sanitizeVocabularyNotes(result.vocabulary_notes, result.reply);
+  if (validNotes.length < 2 && containsHangul(result.reply)) {
+    const repaired = await repairVocabularyNotes(result.reply, ctx);
+    if (repaired.length) result.vocabulary_notes = repaired;
+  } else {
+    result.vocabulary_notes = validNotes;
   }
 
   if (!result.romanization.trim() && containsHangul(result.reply)) {
@@ -392,7 +378,7 @@ function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload 
     pickString(value, ['romanization', 'romaja', 'romanized', 'pronunciation', 'latin']) ?? '';
 
   const rawNotes = value.vocabulary_notes ?? value.vocab_notes ?? value.notes ?? value.word_notes;
-  const vocabulary_notes = sanitizeVocabularyNotes(rawNotes);
+  const vocabulary_notes = sanitizeVocabularyNotes(rawNotes, reply);
 
   let cleanedRomanization = sanitizeRomanization(romanization);
   if (looksLikeModelReasoning(cleanedRomanization)) cleanedRomanization = '';
@@ -405,7 +391,69 @@ function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload 
   };
 }
 
-function sanitizeVocabularyNotes(raw: unknown) {
+async function repairVocabularyNotes(
+  reply: string,
+  ctx: { baseURL: string; apiKey: string; model: string }
+): Promise<ChatReplyPayload['vocabulary_notes']> {
+  const vocabRaw = await tryChatCompletion({
+    ...ctx,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Pick exactly 3 to 5 SHORT Korean learning items from the user message. Each term must be a single word, particle, ending, or short phrase (max 10 Hangul characters) copied verbatim from the message. Do NOT use the full sentence as a term. Return JSON only: {"vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. explanation_zh must be Simplified Chinese.'
+      },
+      { role: 'user', content: reply }
+    ],
+    preferJsonMode: true,
+    temperature: 0.2
+  });
+  if (!vocabRaw) return [];
+
+  const parsedOnly = parseVocabularyNotesOnly(vocabRaw, reply);
+  if (parsedOnly.length >= 2) return parsedOnly;
+
+  const parsedFull = parseStructuredReply(vocabRaw);
+  return sanitizeVocabularyNotes(parsedFull?.vocabulary_notes ?? [], reply);
+}
+
+function parseVocabularyNotesOnly(raw: string, fullReply: string) {
+  const cleaned = stripMarkdownCodeFence(raw);
+  const jsonCandidate = extractFirstJSONObject(cleaned) ?? cleaned;
+  try {
+    const decoded = JSON.parse(jsonCandidate) as Record<string, unknown>;
+    const rawNotes = decoded.vocabulary_notes ?? decoded.vocab_notes ?? decoded.notes ?? decoded.word_notes;
+    return sanitizeVocabularyNotes(rawNotes, fullReply);
+  } catch {
+    return [];
+  }
+}
+
+function isValidVocabularyTerm(term: string, fullReply: string) {
+  const trimmedTerm = term.trim();
+  const trimmedReply = fullReply.trim();
+  if (!containsHangul(trimmedTerm)) return false;
+  if (!trimmedTerm || !trimmedReply) return false;
+  if (trimmedTerm === trimmedReply) return false;
+  if (trimmedTerm.length > 14) return false;
+  if (trimmedTerm.length >= Math.max(12, Math.floor(trimmedReply.length * 0.5))) return false;
+  if (!trimmedReply.includes(trimmedTerm)) return false;
+  return true;
+}
+
+function isGenericVocabularyExplanation(explanation: string) {
+  const lower = explanation.toLowerCase();
+  return (
+    explanation.includes('这是一句自然的韩语') ||
+    explanation.includes('可以整体理解') ||
+    explanation.includes('私聊表达')
+  );
+}
+
+function sanitizeVocabularyNotes(
+  raw: unknown,
+  fullReply: string
+): ChatReplyPayload['vocabulary_notes'] {
   if (!Array.isArray(raw)) return [];
 
   const notes: ChatReplyPayload['vocabulary_notes'] = [];
@@ -414,7 +462,12 @@ function sanitizeVocabularyNotes(raw: unknown) {
   for (const item of raw) {
     if (typeof item === 'string') {
       const parsed = parseNoteLine(item);
-      if (parsed && !seen.has(parsed.term)) {
+      if (
+        parsed &&
+        !seen.has(parsed.term) &&
+        isValidVocabularyTerm(parsed.term, fullReply) &&
+        !isGenericVocabularyExplanation(parsed.explanation_zh)
+      ) {
         seen.add(parsed.term);
         notes.push(parsed);
       }
@@ -427,6 +480,8 @@ function sanitizeVocabularyNotes(raw: unknown) {
       pickString(obj, ['explanation_zh', 'explanation', 'meaning', 'meaning_zh', 'zh', 'note', 'usage']) ?? '';
     const romanization = pickString(obj, ['romanization', 'romaja', 'pronunciation', 'reading', 'latin']) ?? '';
     if (!term || !explanation_zh || seen.has(term)) continue;
+    if (!isValidVocabularyTerm(term, fullReply)) continue;
+    if (isGenericVocabularyExplanation(explanation_zh)) continue;
     seen.add(term);
     notes.push({ term, romanization, explanation_zh });
   }
