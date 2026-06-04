@@ -81,6 +81,24 @@ Headers or body:
 }
 ```
 
+### POST `/api/v1/subscription/sync`
+
+Batch-sync StoreKit transaction IDs to the backend (use after Restore Purchases or before voice clone).
+
+Headers:
+
+```text
+x-aidol-device-id: xxx
+```
+
+Body:
+
+```json
+{
+  "transactionIds": ["1234567890"]
+}
+```
+
 ### POST `/api/v1/subscription/verify`
 
 Verify an Apple StoreKit transaction.

@@ -121,7 +121,16 @@ async function ensureReplyCompleteness(
       preferJsonMode: false,
       temperature: 0.2
     });
-    if (rom) result.romanization = sanitizeRomanization(rom) || rom.trim();
+    if (rom) {
+      const cleaned = sanitizeRomanization(rom);
+      if (cleaned && !looksLikeModelReasoning(cleaned)) {
+        result.romanization = cleaned;
+      }
+    }
+  }
+
+  if (looksLikeModelReasoning(result.romanization)) {
+    result.romanization = '';
   }
 
   return result;
@@ -273,8 +282,8 @@ function extractAssistantContent(envelope: unknown): string {
     const fromToolCalls = extractToolCallArguments(message.tool_calls);
     if (fromToolCalls) return fromToolCalls;
 
-    const fallback = pickString(message, ['text', 'output_text', 'reasoning_content']);
-    if (fallback) return fallback;
+    const fallback = pickString(message, ['text', 'output_text']);
+    if (fallback && !looksLikeModelReasoning(fallback)) return fallback;
   }
 
   const choiceText = pickString(choice, ['text', 'content']);
@@ -385,10 +394,13 @@ function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload 
   const rawNotes = value.vocabulary_notes ?? value.vocab_notes ?? value.notes ?? value.word_notes;
   const vocabulary_notes = sanitizeVocabularyNotes(rawNotes);
 
+  let cleanedRomanization = sanitizeRomanization(romanization);
+  if (looksLikeModelReasoning(cleanedRomanization)) cleanedRomanization = '';
+
   return {
     reply: sanitizeKoreanReply(reply),
     translation_zh: translation_zh.trim(),
-    romanization: sanitizeRomanization(romanization),
+    romanization: cleanedRomanization,
     vocabulary_notes
   };
 }
@@ -475,11 +487,49 @@ function sanitizeKoreanReply(text: string) {
     .trim();
 }
 
+function looksLikeModelReasoning(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const lower = trimmed.toLowerCase();
+  const markers = [
+    'we must',
+    'the instruction',
+    'instruction says',
+    'the user',
+    'probably omit',
+    'need to include',
+    'write only',
+    'json only',
+    'json schema',
+    'return json',
+    'korean pronunciation',
+    'no korean characters',
+    'no chinese',
+    'no labels',
+    'must be',
+    'should be'
+  ];
+  const hits = markers.filter((marker) => lower.includes(marker)).length;
+  if (hits >= 2) return true;
+  if (trimmed.length > 220 && hits >= 1) return true;
+  return false;
+}
+
 function sanitizeRomanization(text: string) {
+  if (looksLikeModelReasoning(text)) return '';
+
   return text
     .split(/\r?\n/)
     .map((line) => stripKnownPrefix(line.trim()))
-    .filter((line) => line && containsLatin(line) && !containsChinese(line) && !containsHangul(line))
+    .filter(
+      (line) =>
+        line &&
+        containsLatin(line) &&
+        !containsChinese(line) &&
+        !containsHangul(line) &&
+        !looksLikeModelReasoning(line)
+    )
     .join('\n')
     .trim();
 }
