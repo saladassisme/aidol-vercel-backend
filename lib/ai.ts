@@ -28,7 +28,7 @@ export async function generateChatReply(params: {
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...params.messages.slice(-12)],
-    preferJsonMode: true,
+    preferJsonMode: false,
     temperature: 0.75
   });
 
@@ -49,7 +49,7 @@ export async function generateChatReply(params: {
       },
       { role: 'user', content: rawContent }
     ],
-    preferJsonMode: true,
+    preferJsonMode: false,
     temperature: 0.2
   });
 
@@ -69,7 +69,7 @@ async function ensureReplyCompleteness(
   };
 
   if (!containsChinese(result.translation_zh)) {
-    const zh = await requestChatCompletion({
+    const zh = await tryChatCompletion({
       ...ctx,
       messages: [
         {
@@ -82,11 +82,11 @@ async function ensureReplyCompleteness(
       preferJsonMode: false,
       temperature: 0.2
     });
-    result.translation_zh = extractChineseOnly(zh) || zh.trim();
+    if (zh) result.translation_zh = extractChineseOnly(zh) || zh.trim();
   }
 
   if (result.vocabulary_notes.length < 2 && containsHangul(result.reply)) {
-    const vocabRaw = await requestChatCompletion({
+    const vocabRaw = await tryChatCompletion({
       ...ctx,
       messages: [
         {
@@ -96,17 +96,19 @@ async function ensureReplyCompleteness(
         },
         { role: 'user', content: result.reply }
       ],
-      preferJsonMode: true,
+      preferJsonMode: false,
       temperature: 0.25
     });
-    const vocabParsed = parseStructuredReply(vocabRaw);
-    if (vocabParsed?.vocabulary_notes.length) {
-      result.vocabulary_notes = vocabParsed.vocabulary_notes;
+    if (vocabRaw) {
+      const vocabParsed = parseStructuredReply(vocabRaw);
+      if (vocabParsed?.vocabulary_notes.length) {
+        result.vocabulary_notes = vocabParsed.vocabulary_notes;
+      }
     }
   }
 
   if (!result.romanization.trim() && containsHangul(result.reply)) {
-    const rom = await requestChatCompletion({
+    const rom = await tryChatCompletion({
       ...ctx,
       messages: [
         {
@@ -119,7 +121,7 @@ async function ensureReplyCompleteness(
       preferJsonMode: false,
       temperature: 0.2
     });
-    result.romanization = sanitizeRomanization(rom) || rom.trim();
+    if (rom) result.romanization = sanitizeRomanization(rom) || rom.trim();
   }
 
   return result;
@@ -159,14 +161,33 @@ Output rules:
 - Include 2 to 5 vocabulary_notes from the Korean reply.`;
 }
 
-async function requestChatCompletion(params: {
+type ChatCompletionParams = {
   baseURL: string;
   apiKey: string;
   model: string;
   messages: ChatMessage[];
   preferJsonMode?: boolean;
   temperature: number;
-}) {
+};
+
+/** Best-effort call: returns null instead of throwing when the provider returns empty content. */
+async function tryChatCompletion(params: ChatCompletionParams): Promise<string | null> {
+  try {
+    return await requestChatCompletion(params);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('empty content')) return null;
+    throw error;
+  }
+}
+
+async function requestChatCompletion(params: ChatCompletionParams) {
+  const content = await fetchChatCompletionContent(params);
+  if (content) return content;
+  throw new Error('AI provider returned empty content.');
+}
+
+async function fetchChatCompletionContent(params: ChatCompletionParams): Promise<string | null> {
   const attempt = async (useJsonMode: boolean) => {
     const body: Record<string, unknown> = {
       model: params.model,
@@ -189,11 +210,10 @@ async function requestChatCompletion(params: {
     return { response, text };
   };
 
-  const attempts: boolean[] = params.preferJsonMode ? [true, false] : [false];
+  const attempts: boolean[] = params.preferJsonMode ? [true, false] : [false, true];
 
   let lastEmptyDetail = 'unknown';
-  for (let i = 0; i < attempts.length; i += 1) {
-    const useJsonMode = attempts[i];
+  for (const useJsonMode of attempts) {
     let { response, text } = await attempt(useJsonMode);
 
     if (!response.ok && useJsonMode && shouldRetryWithoutJsonMode(response.status, text)) {
@@ -212,10 +232,10 @@ async function requestChatCompletion(params: {
     if (content) return content;
 
     lastEmptyDetail = describeEmptyCompletion(envelope);
-    if (!useJsonMode) break;
   }
 
-  throw new Error(`AI provider returned empty content (${lastEmptyDetail}).`);
+  console.warn(`AI empty content (${lastEmptyDetail})`);
+  return null;
 }
 
 function extractAssistantContent(envelope: unknown): string {
@@ -225,6 +245,16 @@ function extractAssistantContent(envelope: unknown): string {
 
   if (typeof root.output_text === 'string' && root.output_text.trim()) {
     return root.output_text.trim();
+  }
+
+  if (root.output && typeof root.output === 'object') {
+    const fromOutput = extractAssistantContent(root.output);
+    if (fromOutput) return fromOutput;
+  }
+
+  if (root.data && typeof root.data === 'object') {
+    const fromData = extractAssistantContent(root.data);
+    if (fromData) return fromData;
   }
 
   const choices = root.choices;
@@ -243,7 +273,7 @@ function extractAssistantContent(envelope: unknown): string {
     const fromToolCalls = extractToolCallArguments(message.tool_calls);
     if (fromToolCalls) return fromToolCalls;
 
-    const fallback = pickString(message, ['text', 'output_text']);
+    const fallback = pickString(message, ['text', 'output_text', 'reasoning_content']);
     if (fallback) return fallback;
   }
 
