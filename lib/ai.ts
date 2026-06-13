@@ -43,8 +43,10 @@ export async function generateChatReply(params: {
 
   const ctx = { baseURL, apiKey, model };
 
-  const parsed = parseStructuredReply(rawContent);
-  if (parsed) return ensureReplyCompleteness(parsed, ctx);
+  const parsed = parseStructuredReply(rawContent, params.targetLanguageCode, params.nativeLanguageCode);
+  if (parsed) {
+    return ensureReplyCompleteness(parsed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+  }
 
   const repaired = await requestChatCompletion({
     baseURL,
@@ -53,8 +55,7 @@ export async function generateChatReply(params: {
     messages: [
       {
         role: 'system',
-        content:
-          'Convert the assistant draft into JSON only. Schema: {"reply":"Korean","translation_zh":"Chinese","romanization":"Latin Korean romanization","vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. No markdown.'
+        content: buildDraftRepairPrompt(params.nativeLanguageCode, params.targetLanguageCode)
       },
       { role: 'user', content: rawContent }
     ],
@@ -62,58 +63,67 @@ export async function generateChatReply(params: {
     temperature: 0.2
   });
 
-  const repairedParsed = parseStructuredReply(repaired);
-  if (repairedParsed) return ensureReplyCompleteness(repairedParsed, ctx);
+  const repairedParsed = parseStructuredReply(repaired, params.targetLanguageCode, params.nativeLanguageCode);
+  if (repairedParsed) {
+    return ensureReplyCompleteness(repairedParsed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+  }
 
   throw new Error('AI provider returned non-JSON content.');
 }
 
 async function ensureReplyCompleteness(
   reply: ChatReplyPayload,
-  ctx: { baseURL: string; apiKey: string; model: string }
+  ctx: { baseURL: string; apiKey: string; model: string },
+  nativeLanguageCode?: string,
+  targetLanguageCode?: string
 ): Promise<ChatReplyPayload> {
-  const normalized = repairMisplacedFields(reply);
+  const normalized = repairMisplacedFields(reply, targetLanguageCode, nativeLanguageCode);
   const result: ChatReplyPayload = {
     ...normalized,
-    reply: extractKoreanOnly(normalized.reply),
-    translation_zh: extractChineseOnly(normalized.translation_zh),
+    reply: extractReplyText(normalized.reply, targetLanguageCode),
+    translation_zh: extractTextField(normalized.translation_zh, nativeLanguageCode),
     romanization: sanitizeRomanization(normalized.romanization),
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (!containsChinese(result.translation_zh)) {
+  if (!result.translation_zh.trim()) {
+    const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
       messages: [
         {
           role: 'system',
-          content:
-            'Translate the Korean chat message into natural Simplified Chinese. Return only the Chinese translation. No Korean, no JSON, no labels, no quotation marks.'
+          content: `Translate the following reply into natural ${nativeLanguage}. Return only the translation. No JSON, no labels, no quotation marks.`
         },
         { role: 'user', content: result.reply }
       ],
       preferJsonMode: false,
       temperature: 0.2
     });
-    if (zh) result.translation_zh = extractChineseOnly(zh) || zh.trim();
+    if (zh) result.translation_zh = extractTextField(zh, nativeLanguageCode) || zh.trim();
   }
 
-  const validNotes = sanitizeVocabularyNotes(result.vocabulary_notes, result.reply);
-  if (validNotes.length < 2 && containsHangul(result.reply)) {
-    const repaired = await repairVocabularyNotes(result.reply, ctx);
+  const validNotes = sanitizeVocabularyNotes(
+    result.vocabulary_notes,
+    result.reply,
+    targetLanguageCode,
+    nativeLanguageCode
+  );
+  if (validNotes.length < 2 && result.reply.trim()) {
+    const repaired = await repairVocabularyNotes(result.reply, ctx, nativeLanguageCode, targetLanguageCode);
     if (repaired.length) result.vocabulary_notes = repaired;
   } else {
     result.vocabulary_notes = validNotes;
   }
 
-  if (!result.romanization.trim() && containsHangul(result.reply)) {
+  if (!result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
+    const targetLanguage = languageName(targetLanguageCode, 'the target language');
     const rom = await tryChatCompletion({
       ...ctx,
       messages: [
         {
           role: 'system',
-          content:
-            'Write the Korean pronunciation in Latin letters (romanization) only. No Korean characters, no Chinese, no labels.'
+          content: `Write the pronunciation of the following ${targetLanguage} reply using Latin letters only. Return only the pronunciation. No JSON, no labels, no explanation. If pronunciation is not useful for this language, return an empty string.`
         },
         { role: 'user', content: result.reply }
       ],
@@ -132,29 +142,32 @@ async function ensureReplyCompleteness(
     result.romanization = '';
   }
 
-  return finalizeReplyPayload(result);
+  return finalizeReplyPayload(result, targetLanguageCode, nativeLanguageCode);
 }
 
-function extractChineseOnly(text: string) {
+function extractReplyText(text: string, targetLanguageCode?: string) {
+  return extractTextField(text, targetLanguageCode);
+}
+
+function extractTextField(text: string, languageCode?: string) {
   const lines = text
     .split(/\r?\n/)
     .map((line) => stripKnownPrefix(line.trim()))
-    .filter(
-      (line) =>
-        containsChinese(line) &&
-        !containsHangul(line) &&
-        !looksLikeModelReasoning(line) &&
-        !isPrimarilyEnglish(line)
-    );
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line && !looksLikeModelReasoning(line));
+
+  if (!lines.length) return text.trim();
+
+  const preferred = lines.filter((line) => languageScore(line, languageCode) > 0.12);
+  if (preferred.length) return preferred.join('\n').trim();
+
   return lines.join('\n').trim();
 }
 
-function isPrimarilyEnglish(line: string) {
-  const letters = [...line.replace(/\s/g, '')];
-  if (!letters.length) return false;
-  const latin = letters.filter((ch) => /[A-Za-z]/.test(ch)).length;
-  const chinese = letters.filter((ch) => /[\u3400-\u9FFF]/.test(ch)).length;
-  return latin > chinese * 2 && latin / letters.length > 0.55;
+function buildDraftRepairPrompt(nativeLanguageCode?: string, targetLanguageCode?: string) {
+  const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
+  const targetLanguage = languageName(targetLanguageCode, 'the target language');
+  return `Convert the assistant draft into JSON only. Schema: {"reply":"${targetLanguage}","translation_zh":"${nativeLanguage}","romanization":"latin transliteration when useful","vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. The "reply" field must stay in ${targetLanguage}. The "translation_zh" field must be written in ${nativeLanguage}. No markdown.`;
 }
 
 function buildSystemPrompt(
@@ -182,7 +195,7 @@ Language pair:
 
 Field separation (critical — do not mix languages across fields):
 - "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
-- "translation_zh" = 翻译：使用 ${nativeLanguage} 书写，解释 reply 的意思；如果该语言就是中文，则使用简体中文。
+- "translation_zh" = 翻译：使用 ${nativeLanguage} 书写，解释 reply 的意思。
 - "romanization" = 发音提示：仅在对目标语言有帮助时输出拉丁转写，禁止写解释。
 - "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。
 - When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
@@ -204,6 +217,8 @@ function languageName(code: string | undefined, fallback: string) {
   switch ((code || '').toLowerCase()) {
     case 'zh-hans':
     case 'zh':
+    case 'zh-hant':
+    case 'zh-tw':
       return 'Chinese';
     case 'en':
       return 'English';
@@ -249,14 +264,23 @@ function languageLevelName(code: string | undefined, fallback: string) {
   }
 }
 
-function finalizeReplyPayload(payload: ChatReplyPayload): ChatReplyPayload {
-  const repaired = repairMisplacedFields(payload);
-  const reply = extractKoreanOnly(repaired.reply);
-  const translation_zh = extractChineseOnly(repaired.translation_zh);
+function finalizeReplyPayload(
+  payload: ChatReplyPayload,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload {
+  const repaired = repairMisplacedFields(payload, targetLanguageCode, nativeLanguageCode);
+  const reply = extractReplyText(repaired.reply, targetLanguageCode);
+  const translation_zh = extractTextField(repaired.translation_zh, nativeLanguageCode);
   let romanization = sanitizeRomanization(repaired.romanization);
   if (looksLikeModelReasoning(romanization)) romanization = '';
 
-  const vocabulary_notes = sanitizeVocabularyNotes(repaired.vocabulary_notes, reply);
+  const vocabulary_notes = sanitizeVocabularyNotes(
+    repaired.vocabulary_notes,
+    reply,
+    targetLanguageCode,
+    nativeLanguageCode
+  );
 
   return {
     reply,
@@ -267,8 +291,12 @@ function finalizeReplyPayload(payload: ChatReplyPayload): ChatReplyPayload {
 }
 
 /** Fix common model mistakes (fields swapped or JSON stuffed into reply). */
-function repairMisplacedFields(payload: ChatReplyPayload): ChatReplyPayload {
-  const embedded = tryParseEmbeddedReplyJson(payload.reply);
+function repairMisplacedFields(
+  payload: ChatReplyPayload,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload {
+  const embedded = tryParseEmbeddedReplyJson(payload.reply, targetLanguageCode, nativeLanguageCode);
   if (embedded) {
     return {
       reply: embedded.reply || payload.reply,
@@ -281,38 +309,47 @@ function repairMisplacedFields(payload: ChatReplyPayload): ChatReplyPayload {
 
   let { reply, translation_zh, romanization, vocabulary_notes } = payload;
 
-  const replyHangul = hangulRatio(reply);
-  const translationHangul = hangulRatio(translation_zh);
-  const translationChinese = chineseRatio(translation_zh);
-  const replyChinese = chineseRatio(reply);
+  const replyTargetScore = languageScore(reply, targetLanguageCode);
+  const replyNativeScore = languageScore(reply, nativeLanguageCode);
+  const translationTargetScore = languageScore(translation_zh, targetLanguageCode);
+  const translationNativeScore = languageScore(translation_zh, nativeLanguageCode);
 
-  if (replyChinese > 0.35 && replyHangul < 0.15 && translationHangul > 0.2) {
+  if (
+    replyTargetScore < 0.1 &&
+    translationTargetScore > replyTargetScore + 0.2 &&
+    translationNativeScore < translationTargetScore
+  ) {
     [reply, translation_zh] = [translation_zh, reply];
-  } else if (!containsHangul(reply) && containsHangul(translation_zh)) {
+  } else if (
+    replyNativeScore > replyTargetScore + 0.2 &&
+    translationTargetScore > translationNativeScore + 0.2
+  ) {
+    [reply, translation_zh] = [translation_zh, reply];
+  } else if (!containsExpectedLanguage(reply, targetLanguageCode) && containsExpectedLanguage(translation_zh, targetLanguageCode)) {
     [reply, translation_zh] = [translation_zh, reply];
   }
 
   const romLatin = latinLetterRatio(romanization);
-  const romChinese = chineseRatio(romanization);
+  const romTarget = languageScore(romanization, targetLanguageCode);
   const transLatin = latinLetterRatio(translation_zh);
 
-  if (romChinese > 0.2 && transLatin > 0.35 && translationChinese < 0.2) {
+  if (romTarget > 0.2 && transLatin > 0.35 && translationNativeScore < 0.2) {
     [translation_zh, romanization] = [romanization, translation_zh];
-  } else if (containsHangul(romanization) && !containsHangul(reply)) {
-    reply = extractKoreanOnly(romanization);
+  } else if (containsExpectedLanguage(romanization, targetLanguageCode) && !containsExpectedLanguage(reply, targetLanguageCode)) {
+    reply = extractReplyText(romanization, targetLanguageCode);
     romanization = '';
-  } else if (romLatin > 0.45 && translationChinese > 0.25 && transLatin < 0.15) {
+  } else if (romLatin > 0.45 && translationTargetScore > 0.2 && transLatin < 0.15) {
     [translation_zh, romanization] = [romanization, translation_zh];
   }
 
   return { reply, translation_zh, romanization, vocabulary_notes };
 }
 
-function tryParseEmbeddedReplyJson(text: string): ChatReplyPayload | null {
+function tryParseEmbeddedReplyJson(text: string, targetLanguageCode?: string, nativeLanguageCode?: string): ChatReplyPayload | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith('{')) return null;
-  const parsed = parseStructuredReply(trimmed);
-  if (!parsed || !containsHangul(parsed.reply)) return null;
+  const parsed = parseStructuredReply(trimmed, targetLanguageCode, nativeLanguageCode);
+  if (!parsed) return null;
   return parsed;
 }
 
@@ -337,23 +374,101 @@ function latinLetterRatio(text: string) {
   return latin / chars.length;
 }
 
+function languageScript(code?: string) {
+  switch ((code || '').toLowerCase()) {
+    case 'zh':
+    case 'zh-hans':
+    case 'zh-hant':
+      return 'chinese';
+    case 'ja':
+      return 'japanese';
+    case 'ko':
+      return 'hangul';
+    case 'ru':
+      return 'cyrillic';
+    case 'en':
+    case 'es':
+    case 'fr':
+    case 'de':
+    case 'it':
+    case 'pt':
+      return 'latin';
+    default:
+      return 'latin';
+  }
+}
+
+function languageScore(text: string, code?: string) {
+  const script = languageScript(code);
+  switch (script) {
+    case 'chinese':
+      return chineseRatio(text);
+    case 'japanese':
+      return japaneseRatio(text);
+    case 'hangul':
+      return hangulRatio(text);
+    case 'cyrillic':
+      return cyrillicRatio(text);
+    case 'latin':
+      return latinLetterRatio(text);
+    default:
+      return Math.max(chineseRatio(text), hangulRatio(text), japaneseRatio(text), cyrillicRatio(text), latinLetterRatio(text));
+  }
+}
+
+function containsExpectedLanguage(text: string, code?: string) {
+  const script = languageScript(code);
+  switch (script) {
+    case 'chinese':
+      return containsChinese(text);
+    case 'japanese':
+      return containsJapanese(text);
+    case 'hangul':
+      return containsHangul(text);
+    case 'cyrillic':
+      return containsCyrillic(text);
+    case 'latin':
+      return containsLatin(text);
+    default:
+      return containsChinese(text) || containsJapanese(text) || containsHangul(text) || containsCyrillic(text) || containsLatin(text);
+  }
+}
+
+function shouldRequestRomanization(targetLanguageCode?: string) {
+  switch (languageScript(targetLanguageCode)) {
+    case 'chinese':
+    case 'japanese':
+    case 'hangul':
+    case 'cyrillic':
+      return true;
+    default:
+      return false;
+  }
+}
+
 function extractKoreanOnly(text: string) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => stripKnownPrefix(line.trim()))
-    .filter((line) => line && containsHangul(line) && !isPrimarilyChinese(line));
-
-  const joined = lines.join('\n').trim();
-  if (joined) return joined;
-
-  const hangulOnly = text.replace(/[^\uAC00-\uD7AF\s!?.,…~ㅋㅎㅠㅜ😼😊❤️]+/gu, ' ');
-  return hangulOnly.replace(/\s+/g, ' ').trim();
+  return extractReplyText(text, 'ko');
 }
 
 function isPrimarilyChinese(line: string) {
   const hangul = (line.match(/[\uAC00-\uD7AF]/g) || []).length;
   const chinese = (line.match(/[\u3400-\u9FFF]/g) || []).length;
   return chinese > 0 && chinese >= hangul;
+}
+
+function japaneseRatio(text: string) {
+  const chars = [...text.replace(/\s/g, '')];
+  if (!chars.length) return 0;
+  const kana = chars.filter((ch) => /[\u3040-\u30FF]/.test(ch)).length;
+  const cjk = chars.filter((ch) => /[\u4E00-\u9FFF]/.test(ch)).length;
+  return Math.min(1, (kana + cjk * 0.5) / chars.length);
+}
+
+function cyrillicRatio(text: string) {
+  const chars = [...text.replace(/\s/g, '')];
+  if (!chars.length) return 0;
+  const cyrillic = chars.filter((ch) => /[\u0400-\u04FF]/.test(ch)).length;
+  return cyrillic / chars.length;
 }
 
 type ChatCompletionParams = {
@@ -532,7 +647,11 @@ function shouldRetryWithoutJsonMode(status: number, body: string) {
   return lower.includes('response_format') || lower.includes('json_object') || lower.includes('unsupported');
 }
 
-function parseStructuredReply(rawContent: string): ChatReplyPayload | null {
+function parseStructuredReply(
+  rawContent: string,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload | null {
   const cleaned = stripMarkdownCodeFence(rawContent);
   const jsonCandidate = extractFirstJSONObject(cleaned) ?? cleaned;
 
@@ -544,27 +663,31 @@ function parseStructuredReply(rawContent: string): ChatReplyPayload | null {
   }
 
   if (decoded) {
-    const normalized = normalizeReplyObject(decoded);
+    const normalized = normalizeReplyObject(decoded, targetLanguageCode, nativeLanguageCode);
     if (normalized) return normalized;
   }
 
-  return parseLooseThreePartReply(cleaned);
+  return parseLooseThreePartReply(cleaned, targetLanguageCode, nativeLanguageCode);
 }
 
-function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload | null {
+function normalizeReplyObject(
+  value: Record<string, unknown>,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload | null {
   const nestedReply = value.reply;
   if (nestedReply && typeof nestedReply === 'object') {
-    return normalizeReplyObject(nestedReply as Record<string, unknown>);
+    return normalizeReplyObject(nestedReply as Record<string, unknown>, targetLanguageCode, nativeLanguageCode);
   }
   if (typeof nestedReply === 'string') {
     const trimmed = nestedReply.trim();
     if (trimmed.startsWith('{')) {
       try {
         const inner = JSON.parse(extractFirstJSONObject(trimmed) ?? trimmed) as Record<string, unknown>;
-        const fromInner = normalizeReplyObject(inner);
+        const fromInner = normalizeReplyObject(inner, targetLanguageCode, nativeLanguageCode);
         if (fromInner) return fromInner;
       } catch {
-        // fall through and treat as plain Korean reply text
+        // fall through and treat as plain reply text
       }
     }
   }
@@ -578,14 +701,14 @@ function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload 
     pickString(value, ['romanization', 'romaja', 'romanized', 'pronunciation', 'latin']) ?? '';
 
   const rawNotes = value.vocabulary_notes ?? value.vocab_notes ?? value.notes ?? value.word_notes;
-  const vocabulary_notes = sanitizeVocabularyNotes(rawNotes, reply);
+  const vocabulary_notes = sanitizeVocabularyNotes(rawNotes, reply, targetLanguageCode, nativeLanguageCode);
 
   let cleanedRomanization = sanitizeRomanization(romanization);
   if (looksLikeModelReasoning(cleanedRomanization)) cleanedRomanization = '';
 
   return {
-    reply: sanitizeKoreanReply(reply),
-    translation_zh: translation_zh.trim(),
+    reply: extractReplyText(reply, targetLanguageCode),
+    translation_zh: extractTextField(translation_zh, nativeLanguageCode),
     romanization: cleanedRomanization,
     vocabulary_notes
   };
@@ -593,15 +716,19 @@ function normalizeReplyObject(value: Record<string, unknown>): ChatReplyPayload 
 
 async function repairVocabularyNotes(
   reply: string,
-  ctx: { baseURL: string; apiKey: string; model: string }
+  ctx: { baseURL: string; apiKey: string; model: string },
+  nativeLanguageCode?: string,
+  targetLanguageCode?: string
 ): Promise<ChatReplyPayload['vocabulary_notes']> {
+  const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
+  const targetLanguage = languageName(targetLanguageCode, 'the target language');
   const vocabRaw = await tryChatCompletion({
     ...ctx,
     messages: [
       {
         role: 'system',
         content:
-          'Pick exactly 3 to 5 SHORT Korean learning items from the user message. Each term must be a single word, particle, ending, or short phrase (max 10 Hangul characters) copied verbatim from the message. Do NOT use the full sentence as a term. Return JSON only: {"vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. explanation_zh must be Simplified Chinese.'
+          `Pick exactly 3 to 5 SHORT learning items from the target-language reply. Each term must be a single word, particle, ending, or short phrase copied verbatim from the message. Do NOT use the full sentence as a term. Return JSON only: {"vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. explanation_zh must be written in ${nativeLanguage}. If a term can be pronounced with a useful Latin transliteration, include romanization; otherwise leave it empty. Target language: ${targetLanguage}.`
       },
       { role: 'user', content: reply }
     ],
@@ -610,49 +737,62 @@ async function repairVocabularyNotes(
   });
   if (!vocabRaw) return [];
 
-  const parsedOnly = parseVocabularyNotesOnly(vocabRaw, reply);
+  const parsedOnly = parseVocabularyNotesOnly(vocabRaw, reply, targetLanguageCode, nativeLanguageCode);
   if (parsedOnly.length >= 2) return parsedOnly;
 
-  const parsedFull = parseStructuredReply(vocabRaw);
-  return sanitizeVocabularyNotes(parsedFull?.vocabulary_notes ?? [], reply);
+  const parsedFull = parseStructuredReply(vocabRaw, targetLanguageCode, nativeLanguageCode);
+  return sanitizeVocabularyNotes(parsedFull?.vocabulary_notes ?? [], reply, targetLanguageCode, nativeLanguageCode);
 }
 
-function parseVocabularyNotesOnly(raw: string, fullReply: string) {
+function parseVocabularyNotesOnly(
+  raw: string,
+  fullReply: string,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+) {
   const cleaned = stripMarkdownCodeFence(raw);
   const jsonCandidate = extractFirstJSONObject(cleaned) ?? cleaned;
   try {
     const decoded = JSON.parse(jsonCandidate) as Record<string, unknown>;
     const rawNotes = decoded.vocabulary_notes ?? decoded.vocab_notes ?? decoded.notes ?? decoded.word_notes;
-    return sanitizeVocabularyNotes(rawNotes, fullReply);
+    return sanitizeVocabularyNotes(rawNotes, fullReply, targetLanguageCode, nativeLanguageCode);
   } catch {
     return [];
   }
 }
 
-function isValidVocabularyTerm(term: string, fullReply: string) {
+function isValidVocabularyTerm(term: string, fullReply: string, targetLanguageCode?: string) {
   const trimmedTerm = term.trim();
   const trimmedReply = fullReply.trim();
-  if (!containsHangul(trimmedTerm)) return false;
   if (!trimmedTerm || !trimmedReply) return false;
   if (trimmedTerm === trimmedReply) return false;
-  if (trimmedTerm.length > 14) return false;
+  if (trimmedTerm.length > 18) return false;
   if (trimmedTerm.length >= Math.max(12, Math.floor(trimmedReply.length * 0.5))) return false;
   if (!trimmedReply.includes(trimmedTerm)) return false;
+  if (targetLanguageCode && languageScript(targetLanguageCode) !== 'latin' && !containsExpectedLanguage(trimmedTerm, targetLanguageCode)) {
+    return false;
+  }
   return true;
 }
 
 function isGenericVocabularyExplanation(explanation: string) {
   const lower = explanation.toLowerCase();
   return (
-    explanation.includes('这是一句自然的韩语') ||
+    explanation.includes('这是一句自然的') ||
     explanation.includes('可以整体理解') ||
-    explanation.includes('私聊表达')
+    explanation.includes('私聊表达') ||
+    lower.includes('natural') ||
+    lower.includes('reply') ||
+    lower.includes('phrase') ||
+    lower.includes('meaning')
   );
 }
 
 function sanitizeVocabularyNotes(
   raw: unknown,
-  fullReply: string
+  fullReply: string,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
 ): ChatReplyPayload['vocabulary_notes'] {
   if (!Array.isArray(raw)) return [];
 
@@ -665,7 +805,7 @@ function sanitizeVocabularyNotes(
       if (
         parsed &&
         !seen.has(parsed.term) &&
-        isValidVocabularyTerm(parsed.term, fullReply) &&
+        isValidVocabularyTerm(parsed.term, fullReply, targetLanguageCode) &&
         !isGenericVocabularyExplanation(parsed.explanation_zh)
       ) {
         seen.add(parsed.term);
@@ -679,14 +819,14 @@ function sanitizeVocabularyNotes(
     const explanation_zh =
       pickString(obj, ['explanation_zh', 'explanation', 'meaning', 'meaning_zh', 'zh', 'note', 'usage']) ?? '';
     const romanization = pickString(obj, ['romanization', 'romaja', 'pronunciation', 'reading', 'latin']) ?? '';
-    const cleanedExplanation = extractChineseOnly(explanation_zh) || explanation_zh.trim();
+    const cleanedExplanation = extractTextField(explanation_zh, nativeLanguageCode);
     if (!term || !cleanedExplanation || seen.has(term)) continue;
-    if (!isValidVocabularyTerm(term, fullReply)) continue;
+    if (!isValidVocabularyTerm(term, fullReply, targetLanguageCode)) continue;
     if (isGenericVocabularyExplanation(cleanedExplanation)) continue;
     if (looksLikeModelReasoning(cleanedExplanation)) continue;
     seen.add(term);
     const noteRom = sanitizeRomanization(romanization);
-    notes.push({ term: extractKoreanOnly(term) || term, romanization: noteRom, explanation_zh: cleanedExplanation });
+    notes.push({ term: extractReplyText(term, targetLanguageCode) || term, romanization: noteRom, explanation_zh: cleanedExplanation });
   }
 
   return notes.slice(0, 6);
@@ -704,7 +844,11 @@ function parseNoteLine(line: string) {
   return null;
 }
 
-function parseLooseThreePartReply(rawText: string): ChatReplyPayload | null {
+function parseLooseThreePartReply(
+  rawText: string,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload | null {
   const lines = stripMarkdownCodeFence(rawText)
     .split(/\r?\n/)
     .map((line) => stripKnownPrefix(line.trim()))
@@ -712,17 +856,24 @@ function parseLooseThreePartReply(rawText: string): ChatReplyPayload | null {
 
   if (lines.length === 0) return null;
 
-  const replyLines = lines.filter((line) => containsHangul(line));
-  const translationLines = lines.filter((line) => containsChinese(line) && !containsHangul(line));
+  const replyLines = lines.filter((line) => containsExpectedLanguage(line, targetLanguageCode));
+  const translationLines = lines.filter(
+    (line) => containsExpectedLanguage(line, nativeLanguageCode) && !containsExpectedLanguage(line, targetLanguageCode)
+  );
   const romanizationLines = lines.filter(
-    (line) => containsLatin(line) && !containsChinese(line) && !containsHangul(line)
+    (line) =>
+      containsLatin(line) &&
+      !containsChinese(line) &&
+      !containsHangul(line) &&
+      !containsJapanese(line) &&
+      !containsCyrillic(line)
   );
 
   if (replyLines.length === 0) return null;
 
   return {
-    reply: sanitizeKoreanReply(replyLines.join('\n')),
-    translation_zh: translationLines.join('\n'),
+    reply: extractReplyText(replyLines.join('\n'), targetLanguageCode),
+    translation_zh: extractTextField(translationLines.join('\n'), nativeLanguageCode),
     romanization: sanitizeRomanization(romanizationLines.join('\n')),
     vocabulary_notes: []
   };
@@ -737,7 +888,7 @@ function pickString(obj: Record<string, unknown>, keys: string[]) {
 }
 
 function sanitizeKoreanReply(text: string) {
-  return extractKoreanOnly(text);
+  return extractReplyText(text, 'ko');
 }
 
 function looksLikeModelReasoning(text: string) {
@@ -789,8 +940,36 @@ function sanitizeRomanization(text: string) {
 
 function stripKnownPrefix(text: string) {
   const prefixes = [
-    'reply:', 'Reply:', 'translation_zh:', 'Translation:',
-    'romanization:', 'Romanization:', '原文:', '原文：', '中文:', '中文：', '翻译:', '翻译：'
+    'reply:',
+    'Reply:',
+    'original:',
+    'Original:',
+    'translation_zh:',
+    'translation:',
+    'Translation:',
+    'meaning:',
+    'Meaning:',
+    'romanization:',
+    'Romanization:',
+    'pronunciation:',
+    'Pronunciation:',
+    '原文:',
+    '原文：',
+    '中文:',
+    '中文：',
+    '翻译:',
+    '翻译：',
+    '解释:',
+    '解释：',
+    '释义:',
+    '释义：',
+    '发音:',
+    '发音：',
+    '로마자:',
+    '발음:',
+    '원문:',
+    '번역:',
+    '번역：'
   ];
   let result = text;
   let changed = true;
@@ -815,8 +994,16 @@ function containsChinese(text: string) {
   return /[\u3400-\u9FFF]/.test(text);
 }
 
+function containsCyrillic(text: string) {
+  return /[\u0400-\u04FF]/.test(text);
+}
+
 function containsLatin(text: string) {
   return /[A-Za-z]/.test(text);
+}
+
+function containsJapanese(text: string) {
+  return /[\u3040-\u30FF]/.test(text) || /[\u4E00-\u9FFF]/.test(text);
 }
 
 function stripMarkdownCodeFence(text: string) {
