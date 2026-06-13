@@ -10,6 +10,7 @@ const BodySchema = z.object({
   profileId: z.string().optional(),
   nickname: z.string().default('Aidol'),
   persona: z.string().min(1),
+  mode: z.enum(['chat', 'voice_letter']).default('chat'),
   nativeLanguageCode: z.string().optional(),
   targetLanguageCode: z.string().optional(),
   languageLevelCode: z.string().optional(),
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
     const reply = await generateChatReply({
       nickname: body.nickname,
       persona: body.persona,
+      mode: body.mode,
       messages: body.messages,
       nativeLanguageCode: body.nativeLanguageCode,
       targetLanguageCode: body.targetLanguageCode,

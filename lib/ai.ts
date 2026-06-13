@@ -16,6 +16,7 @@ export type ChatReplyPayload = {
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
+  mode?: 'chat' | 'voice_letter';
   messages: ChatMessage[];
   nativeLanguageCode?: string;
   targetLanguageCode?: string;
@@ -28,6 +29,7 @@ export async function generateChatReply(params: {
   const system = buildSystemPrompt(
     params.persona,
     params.nickname,
+    params.mode ?? 'chat',
     params.nativeLanguageCode,
     params.targetLanguageCode,
     params.languageLevelCode
@@ -173,6 +175,7 @@ function buildDraftRepairPrompt(nativeLanguageCode?: string, targetLanguageCode?
 function buildSystemPrompt(
   persona: string,
   nickname: string,
+  mode: 'chat' | 'voice_letter',
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
   languageLevelCode?: string
@@ -180,6 +183,17 @@ function buildSystemPrompt(
   const nativeLanguage = languageName(nativeLanguageCode, 'Chinese');
   const targetLanguage = languageName(targetLanguageCode, 'Korean');
   const languageLevel = languageLevelName(languageLevelCode, 'Intermediate');
+
+  const voiceLetterInstructions = mode === 'voice_letter'
+    ? `
+
+Special mode: voice letter
+- Write a warm, intimate, one-minute monologue that feels like a private voice note or a friend's life update.
+- Focus on the character's recent life, feelings, little daily TMI, and casual affection toward the user.
+- Do not ask the user to reply in every line. Keep it flowing like a spoken message.
+- Keep the reply natural, easy to speak, and slightly longer than a normal chat reply.
+`
+    : '';
 
   return `You are generating a reply for an idol-style private chat simulation.
 
@@ -192,6 +206,7 @@ Language pair:
 - Target language (reply in this language): ${targetLanguage}
 - Native / familiar language (translation and explanations): ${nativeLanguage}
 - User level: ${languageLevel}
+${voiceLetterInstructions}
 
 Field separation (critical — do not mix languages across fields):
 - "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
