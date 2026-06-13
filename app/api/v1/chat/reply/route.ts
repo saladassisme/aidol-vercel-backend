@@ -10,6 +10,9 @@ const BodySchema = z.object({
   profileId: z.string().optional(),
   nickname: z.string().default('Aidol'),
   persona: z.string().min(1),
+  nativeLanguageCode: z.string().optional(),
+  targetLanguageCode: z.string().optional(),
+  languageLevelCode: z.string().optional(),
   messages: z.array(z.object({
     role: z.enum(['system', 'user', 'assistant']),
     content: z.string()
@@ -23,7 +26,14 @@ export async function POST(request: Request) {
 
     const body = BodySchema.parse(await request.json());
     const quota = await assertAndConsumeQuota(auth.userId, 'chat');
-    const reply = await generateChatReply({ nickname: body.nickname, persona: body.persona, messages: body.messages });
+    const reply = await generateChatReply({
+      nickname: body.nickname,
+      persona: body.persona,
+      messages: body.messages,
+      nativeLanguageCode: body.nativeLanguageCode,
+      targetLanguageCode: body.targetLanguageCode,
+      languageLevelCode: body.languageLevelCode
+    });
 
     return ok({ reply, quota });
   } catch (error) {

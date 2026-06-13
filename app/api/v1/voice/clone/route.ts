@@ -1,7 +1,5 @@
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
-import { assertAndConsumeQuota } from '@/lib/quota';
-import { getMembership } from '@/lib/membership';
 import { cloneVoiceWithDashScope } from '@/lib/dashscope';
 import { sql } from '@/lib/db';
 
@@ -12,9 +10,6 @@ export async function POST(request: Request) {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;
 
-    const membership = await getMembership(auth.userId);
-    if (!membership.limits.voiceEnabled) return fail('Voice cloning requires membership.', 403, 'MEMBERSHIP_REQUIRED');
-
     const form = await request.formData();
     const file = form.get('audio');
     if (!(file instanceof File)) return fail('audio file is required.', 400, 'MISSING_AUDIO');
@@ -22,7 +17,6 @@ export async function POST(request: Request) {
 
     const preferredName = String(form.get('preferredName') || 'aidol_voice');
     const arrayBuffer = await file.arrayBuffer();
-    await assertAndConsumeQuota(auth.userId, 'voice_clone');
 
     const cloned = await cloneVoiceWithDashScope({
       audioData: Buffer.from(arrayBuffer),

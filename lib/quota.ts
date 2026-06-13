@@ -39,6 +39,33 @@ export async function getTodayUsage(userId: string) {
   return rows[0] ?? { chat_reply_count: 0, tts_count: 0, voice_clone_count: 0 };
 }
 
+export async function hasUsedFreeTTSPreview(userId: string) {
+  const rows = await sql<{ user_id: string }[]>`
+    select user_id
+    from tts_preview_trials
+    where user_id = ${userId}
+    limit 1
+  `;
+  return Boolean(rows[0]);
+}
+
+export async function claimFreeTTSPreview(userId: string) {
+  const rows = await sql<{ user_id: string }[]>`
+    insert into tts_preview_trials (user_id)
+    values (${userId})
+    on conflict (user_id) do nothing
+    returning user_id
+  `;
+  return Boolean(rows[0]);
+}
+
+export async function refundFreeTTSPreview(userId: string) {
+  await sql`
+    delete from tts_preview_trials
+    where user_id = ${userId}
+  `;
+}
+
 export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {
   const membership = await getMembership(userId);
   const limit = limitFor(kind, membership.limits);

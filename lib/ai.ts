@@ -17,12 +17,21 @@ export async function generateChatReply(params: {
   persona: string;
   nickname: string;
   messages: ChatMessage[];
+  nativeLanguageCode?: string;
+  targetLanguageCode?: string;
+  languageLevelCode?: string;
 }) {
   const baseURL = requiredEnv('AI_API_BASE_URL').replace(/\/$/, '');
   const apiKey = requiredEnv('AI_API_KEY');
   const model = optionalEnv('AI_TEXT_MODEL', 'gpt-4o-mini');
 
-  const system = buildSystemPrompt(params.persona, params.nickname);
+  const system = buildSystemPrompt(
+    params.persona,
+    params.nickname,
+    params.nativeLanguageCode,
+    params.targetLanguageCode,
+    params.languageLevelCode
+  );
   const rawContent = await requestChatCompletion({
     baseURL,
     apiKey,
@@ -148,7 +157,17 @@ function isPrimarilyEnglish(line: string) {
   return latin > chinese * 2 && latin / letters.length > 0.55;
 }
 
-function buildSystemPrompt(persona: string, nickname: string) {
+function buildSystemPrompt(
+  persona: string,
+  nickname: string,
+  nativeLanguageCode?: string,
+  targetLanguageCode?: string,
+  languageLevelCode?: string
+) {
+  const nativeLanguage = languageName(nativeLanguageCode, 'Chinese');
+  const targetLanguage = languageName(targetLanguageCode, 'Korean');
+  const languageLevel = languageLevelName(languageLevelCode, 'Intermediate');
+
   return `You are generating a reply for an idol-style private chat simulation.
 
 Character nickname (display only): ${nickname}
@@ -156,23 +175,78 @@ Character nickname (display only): ${nickname}
 Persona:
 ${persona}
 
+Language pair:
+- Target language (reply in this language): ${targetLanguage}
+- Native / familiar language (translation and explanations): ${nativeLanguage}
+- User level: ${languageLevel}
+
 Field separation (critical — do not mix languages across fields):
-- "reply" = 原文：仅韩文（Hangul），可含表情符号，禁止中文、禁止英文、禁止罗马音。
-- "translation_zh" = 中文翻译：仅简体中文，禁止韩文、禁止英文。
-- "romanization" = 罗马音：仅拉丁字母发音，禁止韩文、禁止中文、禁止英文说明。
-- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的韩文词或短短语（≤10字），禁止整句；explanation_zh 用中文释义。
+- "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
+- "translation_zh" = 翻译：使用 ${nativeLanguage} 书写，解释 reply 的意思；如果该语言就是中文，则使用简体中文。
+- "romanization" = 发音提示：仅在对目标语言有帮助时输出拉丁转写，禁止写解释。
+- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。
+- When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
 
 Output rules:
 - Return one JSON object only. No markdown.
 - Schema:
 {
   "reply": "韩文原文",
-  "translation_zh": "中文翻译",
+  "translation_zh": "翻译",
   "romanization": "latin romanization",
   "vocabulary_notes": [
-    {"term":"韩文词","romanization":"latin","explanation_zh":"中文释义"}
+    {"term":"目标语言词","romanization":"latin","explanation_zh":"释义"}
   ]
 }`;
+}
+
+function languageName(code: string | undefined, fallback: string) {
+  switch ((code || '').toLowerCase()) {
+    case 'zh-hans':
+    case 'zh':
+      return 'Chinese';
+    case 'en':
+      return 'English';
+    case 'ja':
+      return 'Japanese';
+    case 'ko':
+      return 'Korean';
+    case 'es':
+      return 'Spanish';
+    case 'fr':
+      return 'French';
+    case 'de':
+      return 'German';
+    case 'it':
+      return 'Italian';
+    case 'pt':
+      return 'Portuguese';
+    case 'ru':
+      return 'Russian';
+    default:
+      return fallback;
+  }
+}
+
+function languageLevelName(code: string | undefined, fallback: string) {
+  switch ((code || '').toLowerCase()) {
+    case 'beginner':
+      return 'Beginner';
+    case 'elementary':
+      return 'Elementary';
+    case 'intermediate':
+      return 'Intermediate';
+    case 'upperintermediate':
+      return 'Upper Intermediate';
+    case 'advanced':
+      return 'Advanced';
+    case 'nearnative':
+      return 'Near Native';
+    case 'native':
+      return 'Native';
+    default:
+      return fallback;
+  }
 }
 
 function finalizeReplyPayload(payload: ChatReplyPayload): ChatReplyPayload {

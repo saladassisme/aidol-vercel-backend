@@ -50,9 +50,11 @@ export async function synthesizeWithDashScope(params: {
   text: string;
   voiceId: string;
   model?: string;
+  languageType?: string;
 }) {
   const apiKey = requiredEnv('DASHSCOPE_API_KEY');
   const model = params.model || optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
+  const languageType = params.languageType || 'Korean';
 
   const response = await fetch(`${endpointBase()}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
@@ -65,7 +67,7 @@ export async function synthesizeWithDashScope(params: {
       input: {
         text: params.text,
         voice: params.voiceId,
-        language_type: 'Korean'
+        language_type: languageType
       }
     })
   });
