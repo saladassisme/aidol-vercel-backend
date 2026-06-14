@@ -10,10 +10,15 @@ const BodySchema = z.object({
   profileId: z.string().optional(),
   nickname: z.string().default('Aidol'),
   persona: z.string().min(1),
-  mode: z.enum(['chat', 'voice_letter']).default('chat'),
+  mode: z.enum(['chat', 'voice_letter', 'teacher']).default('chat'),
   nativeLanguageCode: z.string().optional(),
   targetLanguageCode: z.string().optional(),
   languageLevelCode: z.string().optional(),
+  studyVocabularyEntries: z.array(z.object({
+    term: z.string(),
+    explanation: z.string(),
+    romanization: z.string().optional()
+  })).optional(),
   messages: z.array(z.object({
     role: z.enum(['system', 'user', 'assistant']),
     content: z.string()
@@ -34,7 +39,8 @@ export async function POST(request: Request) {
       messages: body.messages,
       nativeLanguageCode: body.nativeLanguageCode,
       targetLanguageCode: body.targetLanguageCode,
-      languageLevelCode: body.languageLevelCode
+      languageLevelCode: body.languageLevelCode,
+      studyVocabularyEntries: body.studyVocabularyEntries
     });
 
     return ok({ reply, quota });

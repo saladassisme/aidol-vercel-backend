@@ -16,11 +16,16 @@ export type ChatReplyPayload = {
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
-  mode?: 'chat' | 'voice_letter';
+  mode?: 'chat' | 'voice_letter' | 'teacher';
   messages: ChatMessage[];
   nativeLanguageCode?: string;
   targetLanguageCode?: string;
   languageLevelCode?: string;
+  studyVocabularyEntries?: Array<{
+    term: string;
+    explanation: string;
+    romanization?: string;
+  }>;
 }) {
   const baseURL = requiredEnv('AI_API_BASE_URL').replace(/\/$/, '');
   const apiKey = requiredEnv('AI_API_KEY');
@@ -32,7 +37,8 @@ export async function generateChatReply(params: {
     params.mode ?? 'chat',
     params.nativeLanguageCode,
     params.targetLanguageCode,
-    params.languageLevelCode
+    params.languageLevelCode,
+    params.studyVocabularyEntries ?? []
   );
   const rawContent = await requestChatCompletion({
     baseURL,
@@ -45,9 +51,23 @@ export async function generateChatReply(params: {
 
   const ctx = { baseURL, apiKey, model };
 
+  if ((params.mode ?? 'chat') === 'teacher') {
+    const teacherReply = parseTeacherReply(rawContent);
+    const reply = sanitizeTeacherReplyText(teacherReply?.reply ?? normalizeTeacherReply(rawContent));
+    if (!reply.trim()) {
+      throw new Error('AI provider returned non-JSON content.');
+    }
+    return {
+      reply: reply.trim(),
+      translation_zh: '',
+      romanization: '',
+      vocabulary_notes: []
+    };
+  }
+
   const parsed = parseStructuredReply(rawContent, params.targetLanguageCode, params.nativeLanguageCode);
   if (parsed) {
-    return ensureReplyCompleteness(parsed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+    return ensureReplyCompleteness(parsed, ctx, params.nativeLanguageCode, params.targetLanguageCode, params.mode ?? 'chat');
   }
 
   const repaired = await requestChatCompletion({
@@ -55,10 +75,10 @@ export async function generateChatReply(params: {
     apiKey,
     model,
     messages: [
-      {
-        role: 'system',
-        content: buildDraftRepairPrompt(params.nativeLanguageCode, params.targetLanguageCode)
-      },
+        {
+          role: 'system',
+          content: buildDraftRepairPrompt(params.nativeLanguageCode, params.targetLanguageCode, params.mode ?? 'chat')
+        },
       { role: 'user', content: rawContent }
     ],
     preferJsonMode: false,
@@ -67,7 +87,7 @@ export async function generateChatReply(params: {
 
   const repairedParsed = parseStructuredReply(repaired, params.targetLanguageCode, params.nativeLanguageCode);
   if (repairedParsed) {
-    return ensureReplyCompleteness(repairedParsed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+    return ensureReplyCompleteness(repairedParsed, ctx, params.nativeLanguageCode, params.targetLanguageCode, params.mode ?? 'chat');
   }
 
   throw new Error('AI provider returned non-JSON content.');
@@ -77,7 +97,8 @@ async function ensureReplyCompleteness(
   reply: ChatReplyPayload,
   ctx: { baseURL: string; apiKey: string; model: string },
   nativeLanguageCode?: string,
-  targetLanguageCode?: string
+  targetLanguageCode?: string,
+  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
 ): Promise<ChatReplyPayload> {
   const normalized = repairMisplacedFields(reply, targetLanguageCode, nativeLanguageCode);
   const result: ChatReplyPayload = {
@@ -88,7 +109,7 @@ async function ensureReplyCompleteness(
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (!result.translation_zh.trim()) {
+  if (mode !== 'teacher' && !result.translation_zh.trim()) {
     const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
@@ -105,20 +126,24 @@ async function ensureReplyCompleteness(
     if (zh) result.translation_zh = extractTextField(zh, nativeLanguageCode) || zh.trim();
   }
 
-  const validNotes = sanitizeVocabularyNotes(
-    result.vocabulary_notes,
-    result.reply,
-    targetLanguageCode,
-    nativeLanguageCode
-  );
-  if (validNotes.length < 2 && result.reply.trim()) {
-    const repaired = await repairVocabularyNotes(result.reply, ctx, nativeLanguageCode, targetLanguageCode);
-    if (repaired.length) result.vocabulary_notes = repaired;
+  if (mode !== 'teacher') {
+    const validNotes = sanitizeVocabularyNotes(
+      result.vocabulary_notes,
+      result.reply,
+      targetLanguageCode,
+      nativeLanguageCode
+    );
+    if (validNotes.length < 2 && result.reply.trim()) {
+      const repaired = await repairVocabularyNotes(result.reply, ctx, nativeLanguageCode, targetLanguageCode);
+      if (repaired.length) result.vocabulary_notes = repaired;
+    } else {
+      result.vocabulary_notes = validNotes;
+    }
   } else {
-    result.vocabulary_notes = validNotes;
+    result.vocabulary_notes = [];
   }
 
-  if (!result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
+  if (mode !== 'teacher' && !result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
     const targetLanguage = languageName(targetLanguageCode, 'the target language');
     const rom = await tryChatCompletion({
       ...ctx,
@@ -144,7 +169,7 @@ async function ensureReplyCompleteness(
     result.romanization = '';
   }
 
-  return finalizeReplyPayload(result, targetLanguageCode, nativeLanguageCode);
+  return finalizeReplyPayload(result, targetLanguageCode, nativeLanguageCode, mode);
 }
 
 function extractReplyText(text: string, targetLanguageCode?: string) {
@@ -166,23 +191,112 @@ function extractTextField(text: string, languageCode?: string) {
   return lines.join('\n').trim();
 }
 
-function buildDraftRepairPrompt(nativeLanguageCode?: string, targetLanguageCode?: string) {
+function buildDraftRepairPrompt(
+  nativeLanguageCode?: string,
+  targetLanguageCode?: string,
+  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
+) {
   const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
   const targetLanguage = languageName(targetLanguageCode, 'the target language');
-  return `Convert the assistant draft into JSON only. Schema: {"reply":"${targetLanguage}","translation_zh":"${nativeLanguage}","romanization":"latin transliteration when useful","vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. The "reply" field must stay in ${targetLanguage}. The "translation_zh" field must be written in ${nativeLanguage}. No markdown.`;
+  const teacherNote = mode === 'teacher'
+    ? ' For teacher mode, keep translation_zh empty, romanization empty, and vocabulary_notes empty.'
+    : '';
+  return `Convert the assistant draft into JSON only. Schema: {"reply":"${targetLanguage}","translation_zh":"${nativeLanguage}","romanization":"latin transliteration when useful","vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. The "reply" field must stay in ${targetLanguage}. The "translation_zh" field must be written in ${nativeLanguage}.${teacherNote} No markdown.`;
+}
+
+function parseTeacherReply(rawContent: string): ChatReplyPayload | null {
+  const cleaned = stripMarkdownCodeFence(rawContent).trim();
+  if (!cleaned) return null;
+
+  const jsonCandidate = extractFirstJSONObject(cleaned) ?? cleaned;
+  try {
+    const decoded = JSON.parse(jsonCandidate) as Record<string, unknown>;
+    if (decoded && typeof decoded === 'object') {
+      const reply = pickString(decoded, ['reply', 'original', 'text', 'message', 'content']) ?? '';
+      if (reply.trim()) {
+        return {
+          reply: normalizeTeacherReply(reply),
+          translation_zh: '',
+          romanization: '',
+          vocabulary_notes: []
+        };
+      }
+    }
+  } catch {
+    // fall back to raw text below
+  }
+
+  const reply = normalizeTeacherReply(cleaned);
+  if (!reply.trim()) return null;
+  return {
+    reply,
+    translation_zh: '',
+    romanization: '',
+    vocabulary_notes: []
+  };
+}
+
+function sanitizeTeacherReplyText(text: string) {
+  const cleaned = stripMarkdownCodeFence(text);
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => stripKnownPrefix(line.trim()))
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => {
+      if (!line) return false;
+      if (looksLikeModelReasoning(line)) return false;
+      if (/^[{}\[\],:"'`]+$/.test(line)) return false;
+      return true;
+    })
+    .map((line) => line.replace(/^\s*[-•*]+\s*/, '').trim())
+    .filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return cleaned.trim();
+  }
+
+  return lines.join('\n').trim();
+}
+
+function normalizeTeacherReply(text: string) {
+  const cleaned = stripMarkdownCodeFence(text);
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => stripKnownPrefix(line.trim()))
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line && !looksLikeModelReasoning(line));
+
+  if (lines.length === 0) return cleaned.trim();
+  return lines.join('\n').trim();
 }
 
 function buildSystemPrompt(
   persona: string,
   nickname: string,
-  mode: 'chat' | 'voice_letter',
+  mode: 'chat' | 'voice_letter' | 'teacher',
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
-  languageLevelCode?: string
+  languageLevelCode?: string,
+  studyVocabularyEntries: Array<{
+    term: string;
+    explanation: string;
+    romanization?: string;
+  }> = []
 ) {
   const nativeLanguage = languageName(nativeLanguageCode, 'Chinese');
   const targetLanguage = languageName(targetLanguageCode, 'Korean');
   const languageLevel = languageLevelName(languageLevelCode, 'Intermediate');
+  const studyVocabularyBlock = studyVocabularyEntries.length
+    ? `\nStudy vocabulary book entries:\n${studyVocabularyEntries.map((entry, index) => {
+        const pieces = [
+          `#${index + 1}`,
+          `term: ${entry.term}`,
+          entry.romanization ? `romanization: ${entry.romanization}` : null,
+          `meaning: ${entry.explanation}`
+        ].filter(Boolean);
+        return `- ${pieces.join(' | ')}`;
+      }).join('\n')}`
+    : '';
 
   const voiceLetterInstructions = mode === 'voice_letter'
     ? `
@@ -192,6 +306,25 @@ Special mode: voice letter
 - Focus on the character's recent life, feelings, little daily TMI, and casual affection toward the user.
 - Do not ask the user to reply in every line. Keep it flowing like a spoken message.
 - Keep the reply natural, easy to speak, and slightly longer than a normal chat reply.
+`
+    : '';
+
+  const teacherInstructions = mode === 'teacher'
+    ? `
+
+Special mode: teacher
+- Act like a supportive language teacher.
+- Build exactly one multiple-choice question in each assistant reply.
+- If the latest user message is an answer such as A, B, C, or D, judge it first.
+- Correct answer: explicitly say it is correct, then add one short encouraging line in the character's persona.
+- Wrong answer: explain briefly and clearly why it is wrong, then show the correct answer.
+- For a fresh quiz, make the first line the question, then put the A/B/C/D options on separate lines in the same assistant message.
+- For feedback after an answer, keep the reply short, friendly, and in the target language only.
+- Prefer target-language questions and target-language options. Keep the whole reply in ${targetLanguage}.
+- Use the user's saved vocabulary book entries when possible. If entries are available, ask about their meaning, usage, or a simple grammar point built around them.
+- Put the question and the A/B/C/D options in one assistant message only. Do not split the options into multiple assistant turns.
+- Do not add translation, romanization, vocabulary notes, explanations outside the quiz/feedback, or markdown.
+- If there is no suitable vocabulary entry, ask a beginner-friendly grammar or usage question matched to the user's level.
 `
     : '';
 
@@ -207,6 +340,8 @@ Language pair:
 - Native / familiar language (translation and explanations): ${nativeLanguage}
 - User level: ${languageLevel}
 ${voiceLetterInstructions}
+${teacherInstructions}
+${studyVocabularyBlock}
 
 Field separation (critical — do not mix languages across fields):
 - "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
@@ -282,20 +417,23 @@ function languageLevelName(code: string | undefined, fallback: string) {
 function finalizeReplyPayload(
   payload: ChatReplyPayload,
   targetLanguageCode?: string,
-  nativeLanguageCode?: string
+  nativeLanguageCode?: string,
+  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
 ): ChatReplyPayload {
   const repaired = repairMisplacedFields(payload, targetLanguageCode, nativeLanguageCode);
   const reply = extractReplyText(repaired.reply, targetLanguageCode);
-  const translation_zh = extractTextField(repaired.translation_zh, nativeLanguageCode);
-  let romanization = sanitizeRomanization(repaired.romanization);
+  const translation_zh = mode === 'teacher' ? '' : extractTextField(repaired.translation_zh, nativeLanguageCode);
+  let romanization = mode === 'teacher' ? '' : sanitizeRomanization(repaired.romanization);
   if (looksLikeModelReasoning(romanization)) romanization = '';
 
-  const vocabulary_notes = sanitizeVocabularyNotes(
-    repaired.vocabulary_notes,
-    reply,
-    targetLanguageCode,
-    nativeLanguageCode
-  );
+  const vocabulary_notes = mode === 'teacher'
+    ? []
+    : sanitizeVocabularyNotes(
+        repaired.vocabulary_notes,
+        reply,
+        targetLanguageCode,
+        nativeLanguageCode
+      );
 
   return {
     reply,
