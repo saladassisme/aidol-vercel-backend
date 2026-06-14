@@ -40,11 +40,15 @@ export async function generateChatReply(params: {
     params.languageLevelCode,
     params.studyVocabularyEntries ?? []
   );
+  const requestMessages = params.messages.slice(-12);
+  if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'teacher') {
+    requestMessages.push({ role: 'user', content: 'Start a new multiple-choice quiz for the current learning context.' });
+  }
   const rawContent = await requestChatCompletion({
     baseURL,
     apiKey,
     model,
-    messages: [{ role: 'system', content: system }, ...params.messages.slice(-12)],
+    messages: [{ role: 'system', content: system }, ...requestMessages],
     preferJsonMode: true,
     temperature: 0.75
   });
@@ -316,6 +320,7 @@ Special mode: teacher
 - Act like a supportive language teacher.
 - Build exactly one multiple-choice question in each assistant reply.
 - If the latest user message is an answer such as A, B, C, or D, judge it first.
+- If the user has not answered yet, do not wait. Start a fresh quiz immediately.
 - Correct answer: explicitly say it is correct, then add one short encouraging line in the character's persona.
 - Wrong answer: explain briefly and clearly why it is wrong, then show the correct answer.
 - For a fresh quiz, make the first line the question, then put the A/B/C/D options on separate lines in the same assistant message.
