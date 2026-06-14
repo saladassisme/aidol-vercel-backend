@@ -49,7 +49,7 @@ export async function generateChatReply(params: {
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...requestMessages],
-    preferJsonMode: true,
+    preferJsonMode: (params.mode ?? 'chat') !== 'teacher',
     temperature: 0.75
   });
 
@@ -244,7 +244,7 @@ function sanitizeTeacherReplyText(text: string) {
   const cleaned = stripMarkdownCodeFence(text);
   const lines = cleaned
     .split(/\r?\n/)
-    .map((line) => stripKnownPrefix(line.trim()))
+    .map((line) => stripTeacherReplyEnvelope(stripKnownPrefix(line.trim())))
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => {
       if (!line) return false;
@@ -266,12 +266,26 @@ function normalizeTeacherReply(text: string) {
   const cleaned = stripMarkdownCodeFence(text);
   const lines = cleaned
     .split(/\r?\n/)
-    .map((line) => stripKnownPrefix(line.trim()))
+    .map((line) => stripTeacherReplyEnvelope(stripKnownPrefix(line.trim())))
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => line && !looksLikeModelReasoning(line));
 
   if (lines.length === 0) return cleaned.trim();
   return lines.join('\n').trim();
+}
+
+function stripTeacherReplyEnvelope(text: string) {
+  let result = text.trim();
+  result = result
+    .replace(/^["'`{\[]*\s*reply\s*["'`}\]]*\s*[:=]\s*/i, '')
+    .replace(/^["'`{\[]*\s*question\s*["'`}\]]*\s*[:=]\s*/i, '')
+    .replace(/^["'`{\[]*\s*content\s*["'`}\]]*\s*[:=]\s*/i, '')
+    .replace(/^["'`{\[]*\s*text\s*["'`}\]]*\s*[:=]\s*/i, '')
+    .replace(/^["'`{\[]*\s*message\s*["'`}\]]*\s*[:=]\s*/i, '');
+  result = result.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\'/g, "'");
+  result = result.replace(/^\s*[-•*]+\s*/, '').trim();
+  result = result.replace(/^[{[\]\s]+/, '').replace(/[}\]\s]+$/, '').trim();
+  return result;
 }
 
 function buildSystemPrompt(
@@ -327,8 +341,10 @@ Special mode: teacher
 - For feedback after an answer, keep the reply short, friendly, and in the target language only.
 - Prefer target-language questions and target-language options. Keep the whole reply in ${targetLanguage}.
 - Use the user's saved vocabulary book entries when possible. If entries are available, ask about their meaning, usage, or a simple grammar point built around them.
+- Match the question style to the user's level: beginner/elementary should favor word or short phrase meaning, or very simple daily reply choices; intermediate and above can use simple grammar, usage, or nuance questions.
 - Put the question and the A/B/C/D options in one assistant message only. Do not split the options into multiple assistant turns.
-- Do not add translation, romanization, vocabulary notes, explanations outside the quiz/feedback, or markdown.
+- Make the wording feel like the character's persona. Add a short, warm, persona-flavored line when giving feedback.
+- Do not add translation, romanization, vocabulary notes, explanations outside the quiz/feedback, JSON, code fences, or labels such as reply:.
 - If there is no suitable vocabulary entry, ask a beginner-friendly grammar or usage question matched to the user's level.
 `
     : '';
@@ -356,8 +372,10 @@ Field separation (critical — do not mix languages across fields):
 - When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
 
 Output rules:
-- Return one JSON object only. No markdown.
-- Schema:
+-${mode === 'teacher'
+    ? ` Return plain text only. No markdown, no JSON, no labels.`
+    : ` Return one JSON object only. No markdown.
+Schema:
 {
   "reply": "韩文原文",
   "translation_zh": "翻译",
@@ -365,7 +383,7 @@ Output rules:
   "vocabulary_notes": [
     {"term":"目标语言词","romanization":"latin","explanation_zh":"释义"}
   ]
-}`;
+}`}`;
 }
 
 function languageName(code: string | undefined, fallback: string) {

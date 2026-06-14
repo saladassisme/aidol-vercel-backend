@@ -39,30 +39,42 @@ export async function getTodayUsage(userId: string) {
   return rows[0] ?? { chat_reply_count: 0, tts_count: 0, voice_clone_count: 0 };
 }
 
+async function ensureTTSPreviewTrialsTable() {
+  await sql`
+    alter table users
+    add column if not exists tts_preview_used_at timestamptz
+  `;
+}
+
 export async function hasUsedFreeTTSPreview(userId: string) {
-  const rows = await sql<{ user_id: string }[]>`
-    select user_id
-    from tts_preview_trials
-    where user_id = ${userId}
+  await ensureTTSPreviewTrialsTable();
+  const rows = await sql<{ tts_preview_used_at: Date | null }[]>`
+    select tts_preview_used_at
+    from users
+    where id = ${userId}
     limit 1
   `;
-  return Boolean(rows[0]);
+  return Boolean(rows[0]?.tts_preview_used_at);
 }
 
 export async function claimFreeTTSPreview(userId: string) {
-  const rows = await sql<{ user_id: string }[]>`
-    insert into tts_preview_trials (user_id)
-    values (${userId})
-    on conflict (user_id) do nothing
-    returning user_id
+  await ensureTTSPreviewTrialsTable();
+  const rows = await sql<{ id: string }[]>`
+    update users
+    set tts_preview_used_at = coalesce(tts_preview_used_at, now())
+    where id = ${userId}
+      and tts_preview_used_at is null
+    returning id
   `;
   return Boolean(rows[0]);
 }
 
 export async function refundFreeTTSPreview(userId: string) {
+  await ensureTTSPreviewTrialsTable();
   await sql`
-    delete from tts_preview_trials
-    where user_id = ${userId}
+    update users
+    set tts_preview_used_at = null
+    where id = ${userId}
   `;
 }
 

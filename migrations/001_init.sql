@@ -1,6 +1,7 @@
 create table if not exists users (
   id uuid primary key,
   device_id text unique not null,
+  tts_preview_used_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -50,6 +51,7 @@ create table if not exists tts_cache (
   model text not null,
   text_hash text not null,
   audio_url text not null,
+  audio_base64 text,
   created_at timestamptz not null default now(),
   unique (user_id, voice_id, model, text_hash)
 );

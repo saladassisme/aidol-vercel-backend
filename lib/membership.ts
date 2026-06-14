@@ -30,7 +30,7 @@ export function limitsForMember(isMember: boolean) {
 
   return {
     dailyChatReplies: optionalEnvInt('FREE_DAILY_CHAT_LIMIT', 10),
-    dailyTTS: 0,
+    dailyTTS: optionalEnvInt('FREE_DAILY_TTS_LIMIT', 3),
     monthlyVoiceClones: 0,
     maxProfiles: 1,
     voiceEnabled: false,
