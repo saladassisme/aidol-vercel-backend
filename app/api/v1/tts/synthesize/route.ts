@@ -24,7 +24,9 @@ export async function POST(request: Request) {
     userId = auth.userId;
 
     const body = BodySchema.parse(await request.json());
-    const isTrial = request.headers.get('x-aidol-trial') === 'onboarding';
+    const trialContext = request.headers.get('x-aidol-trial') || '';
+    const isOnboardingTrial = trialContext === 'onboarding';
+    const isTrial = Boolean(trialContext);
 
     const model = body.model || process.env.DASHSCOPE_TTS_VC_MODEL || 'qwen3-tts-vc-2026-01-22';
     const languageType = body.languageType || 'Korean';
@@ -56,7 +58,10 @@ export async function POST(request: Request) {
       return ok({ audioUrl: cached[0].audio_url, audioBase64, cached: true });
     }
 
-    if (isTrial) {
+    if (isOnboardingTrial) {
+      // Onboarding needs one reliable welcome preview for the freshly-created voice.
+      // It should not consume or be blocked by the user's normal free preview slot.
+    } else if (isTrial) {
       claimedTrial = await claimFreeTTSPreview(auth.userId);
       if (!claimedTrial) return fail('免费试听已用完，请开通会员后继续。', 403, 'MEMBERSHIP_REQUIRED');
     } else {
