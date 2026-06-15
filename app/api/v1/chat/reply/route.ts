@@ -10,7 +10,7 @@ const BodySchema = z.object({
   profileId: z.string().optional(),
   nickname: z.string().default('Aidol'),
   persona: z.string().min(1),
-  mode: z.enum(['chat', 'voice_letter', 'teacher', 'theater_stage_beat']).default('chat'),
+  mode: z.enum(['chat', 'voice_letter', 'teacher', 'theater_stage_beat', 'theater']).default('chat'),
   nativeLanguageCode: z.string().optional(),
   targetLanguageCode: z.string().optional(),
   languageLevelCode: z.string().optional(),

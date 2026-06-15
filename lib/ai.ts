@@ -16,7 +16,7 @@ export type ChatReplyPayload = {
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
-  mode?: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat';
+  mode?: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater';
   messages: ChatMessage[];
   nativeLanguageCode?: string;
   targetLanguageCode?: string;
@@ -115,7 +115,7 @@ async function ensureReplyCompleteness(
   ctx: { baseURL: string; apiKey: string; model: string },
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater' = 'chat'
 ): Promise<ChatReplyPayload> {
   const normalized = repairMisplacedFields(reply, targetLanguageCode, nativeLanguageCode);
   const result: ChatReplyPayload = {
@@ -126,7 +126,7 @@ async function ensureReplyCompleteness(
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat' && !result.translation_zh.trim()) {
+  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat' && mode !== 'theater' && !result.translation_zh.trim()) {
     const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
@@ -143,7 +143,7 @@ async function ensureReplyCompleteness(
     if (zh) result.translation_zh = extractTextField(zh, nativeLanguageCode) || zh.trim();
   }
 
-  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat') {
+  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat' && mode !== 'theater') {
     const validNotes = sanitizeVocabularyNotes(
       result.vocabulary_notes,
       result.reply,
@@ -160,7 +160,7 @@ async function ensureReplyCompleteness(
     result.vocabulary_notes = [];
   }
 
-  if (mode !== 'teacher' && !result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
+  if (mode !== 'teacher' && mode !== 'theater' && !result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
     const targetLanguage = languageName(targetLanguageCode, 'the target language');
     const rom = await tryChatCompletion({
       ...ctx,
@@ -211,7 +211,7 @@ function extractTextField(text: string, languageCode?: string) {
 function buildDraftRepairPrompt(
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater' = 'chat'
 ) {
   const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
   const targetLanguage = languageName(targetLanguageCode, 'the target language');
@@ -326,7 +326,7 @@ function stripTeacherReplyEnvelope(text: string) {
 function buildSystemPrompt(
   persona: string,
   nickname: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat',
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater',
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
   languageLevelCode?: string,
@@ -384,6 +384,16 @@ Special mode: teacher
 `
     : '';
 
+  const theaterInstructions = mode === 'theater'
+    ? `
+
+Special mode: theater roleplay
+- Stay fully in character for the scene. Keep replies concise, emotional, and easy to continue.
+- Output JSON with reply and translation_zh. Leave vocabulary_notes as an empty array.
+- Do not add vocabulary notes.
+`
+    : '';
+
   const theaterStageBeatInstructions = mode === 'theater_stage_beat'
     ? `
 
@@ -412,6 +422,7 @@ Language pair:
 - User level: ${languageLevel}
 ${voiceLetterInstructions}
 ${teacherInstructions}
+${theaterInstructions}
 ${theaterStageBeatInstructions}
 ${studyVocabularyBlock}
 
@@ -494,7 +505,7 @@ function finalizeReplyPayload(
   payload: ChatReplyPayload,
   targetLanguageCode?: string,
   nativeLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater' = 'chat'
 ): ChatReplyPayload {
   const repaired = repairMisplacedFields(payload, targetLanguageCode, nativeLanguageCode);
   const reply = extractReplyText(repaired.reply, targetLanguageCode);
