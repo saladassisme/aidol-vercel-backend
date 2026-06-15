@@ -19,9 +19,9 @@ export type MembershipState = {
 export function limitsForMember(isMember: boolean) {
   if (isMember) {
     return {
-      dailyChatReplies: optionalEnvInt('MEMBER_DAILY_CHAT_LIMIT', 30),
-      dailyTTS: optionalEnvInt('MEMBER_DAILY_TTS_LIMIT', 20),
-      monthlyVoiceClones: optionalEnvInt('MEMBER_MONTHLY_VOICE_CLONE_LIMIT', 1),
+      dailyChatReplies: optionalEnvInt('MEMBER_DAILY_CHAT_LIMIT', 200),
+      dailyTTS: optionalEnvInt('MEMBER_DAILY_TTS_LIMIT', 100),
+      monthlyVoiceClones: optionalEnvInt('MEMBER_MONTHLY_VOICE_CLONE_LIMIT', 10),
       maxProfiles: 3,
       voiceEnabled: true,
       proactiveEnabled: true
@@ -29,11 +29,11 @@ export function limitsForMember(isMember: boolean) {
   }
 
   return {
-    dailyChatReplies: optionalEnvInt('FREE_DAILY_CHAT_LIMIT', 10),
-    dailyTTS: optionalEnvInt('FREE_DAILY_TTS_LIMIT', 3),
-    monthlyVoiceClones: 0,
+    dailyChatReplies: optionalEnvInt('FREE_DAILY_CHAT_LIMIT', 100),
+    dailyTTS: optionalEnvInt('FREE_DAILY_TTS_LIMIT', 50),
+    monthlyVoiceClones: optionalEnvInt('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
     maxProfiles: 1,
-    voiceEnabled: false,
+    voiceEnabled: true,
     proactiveEnabled: false
   };
 }
