@@ -4,7 +4,7 @@ import { cloneVoiceWithDashScope } from '@/lib/dashscope';
 import { sql } from '@/lib/db';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
