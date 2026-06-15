@@ -1,6 +1,10 @@
 import { sql } from './db';
 import { optionalEnv, optionalEnvInt } from './env';
 
+function quotaLimit(primary: string, minimum: number) {
+  return Math.max(optionalEnvInt(primary, minimum), minimum);
+}
+
 export type MembershipState = {
   isMember: boolean;
   productId: string | null;
@@ -19,9 +23,9 @@ export type MembershipState = {
 export function limitsForMember(isMember: boolean) {
   if (isMember) {
     return {
-      dailyChatReplies: optionalEnvInt('MEMBER_DAILY_CHAT_LIMIT', 200),
-      dailyTTS: optionalEnvInt('MEMBER_DAILY_TTS_LIMIT', 100),
-      monthlyVoiceClones: optionalEnvInt('MEMBER_MONTHLY_VOICE_CLONE_LIMIT', 10),
+      dailyChatReplies: quotaLimit('MEMBER_DAILY_CHAT_LIMIT', 200),
+      dailyTTS: quotaLimit('MEMBER_DAILY_TTS_LIMIT', 100),
+      monthlyVoiceClones: quotaLimit('MEMBER_MONTHLY_VOICE_CLONE_LIMIT', 10),
       maxProfiles: 3,
       voiceEnabled: true,
       proactiveEnabled: true
@@ -29,9 +33,9 @@ export function limitsForMember(isMember: boolean) {
   }
 
   return {
-    dailyChatReplies: optionalEnvInt('FREE_DAILY_CHAT_LIMIT', 100),
-    dailyTTS: optionalEnvInt('FREE_DAILY_TTS_LIMIT', 50),
-    monthlyVoiceClones: optionalEnvInt('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
+    dailyChatReplies: quotaLimit('FREE_DAILY_CHAT_LIMIT', 100),
+    dailyTTS: quotaLimit('FREE_DAILY_TTS_LIMIT', 50),
+    monthlyVoiceClones: quotaLimit('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
     maxProfiles: 1,
     voiceEnabled: true,
     proactiveEnabled: false
