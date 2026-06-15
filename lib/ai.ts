@@ -16,7 +16,7 @@ export type ChatReplyPayload = {
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
-  mode?: 'chat' | 'voice_letter' | 'teacher';
+  mode?: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat';
   messages: ChatMessage[];
   nativeLanguageCode?: string;
   targetLanguageCode?: string;
@@ -44,12 +44,15 @@ export async function generateChatReply(params: {
   if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'teacher') {
     requestMessages.push({ role: 'user', content: 'Start a new multiple-choice quiz for the current learning context.' });
   }
+  if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'voice_letter') {
+    requestMessages.push({ role: 'user', content: "[Start today's voice letter as a warm spoken monologue.]" });
+  }
   const rawContent = await requestChatCompletion({
     baseURL,
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...requestMessages],
-    preferJsonMode: (params.mode ?? 'chat') !== 'teacher',
+    preferJsonMode: (params.mode ?? 'chat') !== 'teacher' && (params.mode ?? 'chat') !== 'theater_stage_beat',
     temperature: 0.75
   });
 
@@ -63,6 +66,16 @@ export async function generateChatReply(params: {
     }
     return {
       reply: reply.trim(),
+      translation_zh: '',
+      romanization: '',
+      vocabulary_notes: []
+    };
+  }
+
+  if ((params.mode ?? 'chat') === 'theater_stage_beat') {
+    const beat = sanitizeTheaterStageBeatText(rawContent, params.nativeLanguageCode);
+    return {
+      reply: beat,
       translation_zh: '',
       romanization: '',
       vocabulary_notes: []
@@ -102,7 +115,7 @@ async function ensureReplyCompleteness(
   ctx: { baseURL: string; apiKey: string; model: string },
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
 ): Promise<ChatReplyPayload> {
   const normalized = repairMisplacedFields(reply, targetLanguageCode, nativeLanguageCode);
   const result: ChatReplyPayload = {
@@ -113,7 +126,7 @@ async function ensureReplyCompleteness(
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (mode !== 'teacher' && !result.translation_zh.trim()) {
+  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat' && !result.translation_zh.trim()) {
     const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
@@ -130,7 +143,7 @@ async function ensureReplyCompleteness(
     if (zh) result.translation_zh = extractTextField(zh, nativeLanguageCode) || zh.trim();
   }
 
-  if (mode !== 'teacher') {
+  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat') {
     const validNotes = sanitizeVocabularyNotes(
       result.vocabulary_notes,
       result.reply,
@@ -198,7 +211,7 @@ function extractTextField(text: string, languageCode?: string) {
 function buildDraftRepairPrompt(
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
 ) {
   const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
   const targetLanguage = languageName(targetLanguageCode, 'the target language');
@@ -262,6 +275,28 @@ function sanitizeTeacherReplyText(text: string) {
   return lines.join('\n').trim();
 }
 
+function sanitizeTheaterStageBeatText(text: string, nativeLanguageCode?: string) {
+  const cleaned = stripMarkdownCodeFence(text)
+    .replace(/```/g, '')
+    .trim();
+  if (!cleaned) return '';
+
+  const upper = cleaned.toUpperCase();
+  if (upper === 'SKIP' || upper === 'NONE' || cleaned === '无' || cleaned === '跳过') {
+    return '';
+  }
+
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => stripKnownPrefix(line.trim()))
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line && !looksLikeModelReasoning(line));
+
+  const joined = (lines.length ? lines.join(' ') : cleaned).trim();
+  const nativeLine = lines.find((line) => containsExpectedLanguage(line, nativeLanguageCode)) ?? joined;
+  return extractTextField(nativeLine, nativeLanguageCode) || nativeLine;
+}
+
 function normalizeTeacherReply(text: string) {
   const cleaned = stripMarkdownCodeFence(text);
   const lines = cleaned
@@ -291,7 +326,7 @@ function stripTeacherReplyEnvelope(text: string) {
 function buildSystemPrompt(
   persona: string,
   nickname: string,
-  mode: 'chat' | 'voice_letter' | 'teacher',
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat',
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
   languageLevelCode?: string,
@@ -349,6 +384,21 @@ Special mode: teacher
 `
     : '';
 
+  const theaterStageBeatInstructions = mode === 'theater_stage_beat'
+    ? `
+
+Special mode: theater stage beat
+- Write ONE short parenthetical stage-direction line in ${nativeLanguage} only.
+- Third-person narration of a small visible moment (expression, gesture, atmosphere).
+- If you mention the partner by name, use exactly "${nickname}" — the user's configured display name.
+- Never translate, transliterate, or localize the partner name (e.g. do not write 마틴 for Martin).
+- Wrap the whole line in parentheses.
+- No dialogue, no quotes inside, no translation, no JSON, no labels.
+- Keep it under 36 characters when possible.
+- If nothing notable should happen, output exactly: SKIP
+`
+    : '';
+
   return `You are generating a reply for an idol-style private chat simulation.
 
 Character nickname (display only): ${nickname}
@@ -362,6 +412,7 @@ Language pair:
 - User level: ${languageLevel}
 ${voiceLetterInstructions}
 ${teacherInstructions}
+${theaterStageBeatInstructions}
 ${studyVocabularyBlock}
 
 Field separation (critical — do not mix languages across fields):
@@ -374,6 +425,8 @@ Field separation (critical — do not mix languages across fields):
 Output rules:
 -${mode === 'teacher'
     ? ` Return plain text only. No markdown, no JSON, no labels.`
+    : mode === 'theater_stage_beat'
+    ? ` Return plain text only in ${nativeLanguage}. No markdown, no JSON, no labels.`
     : ` Return one JSON object only. No markdown.
 Schema:
 {
@@ -441,7 +494,7 @@ function finalizeReplyPayload(
   payload: ChatReplyPayload,
   targetLanguageCode?: string,
   nativeLanguageCode?: string,
-  mode: 'chat' | 'voice_letter' | 'teacher' = 'chat'
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' = 'chat'
 ): ChatReplyPayload {
   const repaired = repairMisplacedFields(payload, targetLanguageCode, nativeLanguageCode);
   const reply = extractReplyText(repaired.reply, targetLanguageCode);
