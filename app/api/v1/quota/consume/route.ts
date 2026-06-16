@@ -13,7 +13,11 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     const kindRaw = String(body.kind || '').trim();
-    const kind = kindRaw === 'tts' ? 'tts' : 'chat';
+    const kind = kindRaw === 'tts'
+      ? 'tts'
+      : kindRaw === 'theater_session'
+        ? 'theater_session'
+        : 'chat';
 
     const quota = await assertAndConsumeQuota(auth.userId, kind);
     return ok({ kind, quota });

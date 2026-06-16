@@ -1,13 +1,14 @@
 import { sql } from './db';
 import { getMembership } from './membership';
 
-export type UsageKind = 'chat' | 'tts' | 'voice_clone';
+export type UsageKind = 'chat' | 'tts' | 'voice_clone' | 'theater_session';
 
 function columnFor(kind: UsageKind) {
   switch (kind) {
     case 'chat': return 'chat_reply_count';
     case 'tts': return 'tts_count';
     case 'voice_clone': return 'voice_clone_count';
+    case 'theater_session': return 'theater_session_count';
   }
 }
 
@@ -16,10 +17,19 @@ function limitFor(kind: UsageKind, limits: Awaited<ReturnType<typeof getMembersh
     case 'chat': return limits.dailyChatReplies;
     case 'tts': return limits.dailyTTS;
     case 'voice_clone': return limits.monthlyVoiceClones;
+    case 'theater_session': return limits.dailyTheaterSessions;
   }
 }
 
+async function ensureTheaterUsageColumn() {
+  await sql`
+    alter table daily_usage
+    add column if not exists theater_session_count int not null default 0
+  `;
+}
+
 export async function getTodayUsage(userId: string) {
+  await ensureTheaterUsageColumn();
   await sql`
     insert into daily_usage (user_id, usage_date)
     values (${userId}, current_date)
@@ -30,13 +40,19 @@ export async function getTodayUsage(userId: string) {
     chat_reply_count: number;
     tts_count: number;
     voice_clone_count: number;
+    theater_session_count: number;
   }[]>`
-    select chat_reply_count, tts_count, voice_clone_count
+    select chat_reply_count, tts_count, voice_clone_count, theater_session_count
     from daily_usage
     where user_id = ${userId} and usage_date = current_date
     limit 1
   `;
-  return rows[0] ?? { chat_reply_count: 0, tts_count: 0, voice_clone_count: 0 };
+  return rows[0] ?? {
+    chat_reply_count: 0,
+    tts_count: 0,
+    voice_clone_count: 0,
+    theater_session_count: 0
+  };
 }
 
 async function ensureTTSPreviewTrialsTable() {
@@ -161,8 +177,17 @@ export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {
   `;
 
   const usage = await getTodayUsage(userId);
-  const current = kind === 'chat' ? usage.chat_reply_count : kind === 'tts' ? usage.tts_count : usage.voice_clone_count;
+  const current = kind === 'chat'
+    ? usage.chat_reply_count
+    : kind === 'tts'
+      ? usage.tts_count
+      : kind === 'theater_session'
+        ? usage.theater_session_count
+        : usage.voice_clone_count;
   if (current >= limit) {
+    if (kind === 'theater_session') {
+      throw new Error('Daily theater session limit exceeded.');
+    }
     throw new Error(`Daily quota exceeded for ${kind}.`);
   }
 
@@ -170,6 +195,8 @@ export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {
     await sql`update daily_usage set chat_reply_count = chat_reply_count + 1 where user_id = ${userId} and usage_date = current_date`;
   } else if (col === 'tts_count') {
     await sql`update daily_usage set tts_count = tts_count + 1 where user_id = ${userId} and usage_date = current_date`;
+  } else if (col === 'theater_session_count') {
+    await sql`update daily_usage set theater_session_count = theater_session_count + 1 where user_id = ${userId} and usage_date = current_date`;
   } else {
     await sql`update daily_usage set voice_clone_count = voice_clone_count + 1 where user_id = ${userId} and usage_date = current_date`;
   }
@@ -195,6 +222,12 @@ export async function refundConsumedQuota(userId: string, kind: UsageKind) {
     await sql`
       update daily_usage
       set tts_count = greatest(tts_count - 1, 0)
+      where user_id = ${userId} and usage_date = current_date
+    `;
+  } else if (col === 'theater_session_count') {
+    await sql`
+      update daily_usage
+      set theater_session_count = greatest(theater_session_count - 1, 0)
       where user_id = ${userId} and usage_date = current_date
     `;
   } else {
