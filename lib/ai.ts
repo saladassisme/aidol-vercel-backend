@@ -13,6 +13,68 @@ export type ChatReplyPayload = {
   }>;
 };
 
+function voiceLetterMinReplyLength(targetLanguageCode?: string): number {
+  switch ((targetLanguageCode || '').toLowerCase()) {
+    case 'ko':
+    case 'ja':
+      return 240;
+    case 'zh-hans':
+    case 'zh':
+    case 'zh-hant':
+    case 'zh-tw':
+      return 150;
+    case 'en':
+      return 300;
+    default:
+      return 220;
+  }
+}
+
+async function expandVoiceLetterIfTooShort(
+  reply: ChatReplyPayload,
+  ctx: { baseURL: string; apiKey: string; model: string },
+  nativeLanguageCode?: string,
+  targetLanguageCode?: string
+): Promise<ChatReplyPayload> {
+  const minLength = voiceLetterMinReplyLength(targetLanguageCode);
+  if (reply.reply.trim().length >= minLength) {
+    return finalizeReplyPayload(reply, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+  }
+
+  const targetLanguage = languageName(targetLanguageCode, 'the target language');
+  const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
+  const expanded = await tryChatCompletion({
+    ...ctx,
+    maxTokens: 2200,
+    messages: [
+      {
+        role: 'system',
+        content: `Expand the draft into a longer voice letter monologue in ${targetLanguage}. When spoken aloud it should take about 45-75 seconds. Use at least 10 sentences and at least ${minLength} characters in "reply". Keep the same mood and character. Return JSON only: {"reply":"","translation_zh":"${nativeLanguage} translation","romanization":"","vocabulary_notes":[]}.`
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          reply: reply.reply,
+          translation_zh: reply.translation_zh
+        })
+      }
+    ],
+    preferJsonMode: true,
+    temperature: 0.7
+  });
+
+  if (!expanded) {
+    return finalizeReplyPayload(reply, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+  }
+
+  const parsed = parseStructuredReply(expanded, targetLanguageCode, nativeLanguageCode);
+  if (!parsed) {
+    return finalizeReplyPayload(reply, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+  }
+
+  return finalizeReplyPayload(parsed, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+}
+
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
@@ -45,15 +107,20 @@ export async function generateChatReply(params: {
     requestMessages.push({ role: 'user', content: 'Start a new multiple-choice quiz for the current learning context.' });
   }
   if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'voice_letter') {
-    requestMessages.push({ role: 'user', content: "[Start today's voice letter as a warm spoken monologue.]" });
+    requestMessages.push({
+      role: 'user',
+      content: "[Start today's voice letter: a full ~one-minute warm spoken monologue with recent life updates, feelings, and casual affection. Not a short greeting.]"
+    });
   }
+  const maxTokens = (params.mode ?? 'chat') === 'voice_letter' ? 2200 : 900;
   const rawContent = await requestChatCompletion({
     baseURL,
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...requestMessages],
     preferJsonMode: (params.mode ?? 'chat') !== 'teacher' && (params.mode ?? 'chat') !== 'theater_stage_beat',
-    temperature: 0.75
+    temperature: 0.75,
+    maxTokens
   });
 
   const ctx = { baseURL, apiKey, model };
@@ -84,7 +151,17 @@ export async function generateChatReply(params: {
 
   const parsed = parseStructuredReply(rawContent, params.targetLanguageCode, params.nativeLanguageCode);
   if (parsed) {
-    return ensureReplyCompleteness(parsed, ctx, params.nativeLanguageCode, params.targetLanguageCode, params.mode ?? 'chat');
+    const completed = await ensureReplyCompleteness(
+      parsed,
+      ctx,
+      params.nativeLanguageCode,
+      params.targetLanguageCode,
+      params.mode ?? 'chat'
+    );
+    if ((params.mode ?? 'chat') === 'voice_letter') {
+      return expandVoiceLetterIfTooShort(completed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+    }
+    return completed;
   }
 
   const repaired = await requestChatCompletion({
@@ -99,12 +176,23 @@ export async function generateChatReply(params: {
       { role: 'user', content: rawContent }
     ],
     preferJsonMode: false,
-    temperature: 0.2
+    temperature: 0.2,
+    maxTokens
   });
 
   const repairedParsed = parseStructuredReply(repaired, params.targetLanguageCode, params.nativeLanguageCode);
   if (repairedParsed) {
-    return ensureReplyCompleteness(repairedParsed, ctx, params.nativeLanguageCode, params.targetLanguageCode, params.mode ?? 'chat');
+    const completed = await ensureReplyCompleteness(
+      repairedParsed,
+      ctx,
+      params.nativeLanguageCode,
+      params.targetLanguageCode,
+      params.mode ?? 'chat'
+    );
+    if ((params.mode ?? 'chat') === 'voice_letter') {
+      return expandVoiceLetterIfTooShort(completed, ctx, params.nativeLanguageCode, params.targetLanguageCode);
+    }
+    return completed;
   }
 
   throw new Error('AI provider returned non-JSON content.');
@@ -160,7 +248,7 @@ async function ensureReplyCompleteness(
     result.vocabulary_notes = [];
   }
 
-  if (mode !== 'teacher' && mode !== 'theater' && !result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
+  if (mode !== 'teacher' && mode !== 'theater' && mode !== 'voice_letter' && !result.romanization.trim() && shouldRequestRomanization(targetLanguageCode)) {
     const targetLanguage = languageName(targetLanguageCode, 'the target language');
     const rom = await tryChatCompletion({
       ...ctx,
@@ -217,6 +305,8 @@ function buildDraftRepairPrompt(
   const targetLanguage = languageName(targetLanguageCode, 'the target language');
   const teacherNote = mode === 'teacher'
     ? ' For teacher mode, keep translation_zh empty, romanization empty, and vocabulary_notes empty.'
+    : mode === 'voice_letter'
+    ? ' For voice letter mode, keep the full long monologue in reply, vocabulary_notes as [], and romanization as "".'
     : '';
   return `Convert the assistant draft into JSON only. Schema: {"reply":"${targetLanguage}","translation_zh":"${nativeLanguage}","romanization":"latin transliteration when useful","vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. The "reply" field must stay in ${targetLanguage}. The "translation_zh" field must be written in ${nativeLanguage}.${teacherNote} No markdown.`;
 }
@@ -355,13 +445,18 @@ function buildSystemPrompt(
     ? `
 
 Special mode: voice letter
-- Write a warm, intimate, one-minute monologue that feels like a private voice note or a friend's life update.
-- Focus on the character's recent life, feelings, little daily TMI, and casual affection toward the user.
-- Do not ask the user to reply in every line. Keep it flowing like a spoken message.
-- Keep the reply natural, easy to speak, and slightly longer than a normal chat reply.
+- Write a warm, intimate spoken monologue like a private voice note or a close friend's life update.
+- Length is critical: when read aloud at a natural pace, "reply" should take about 45-75 seconds (roughly one minute).
+- For Korean/Japanese, aim for at least 10 full sentences and roughly 280-480 characters in "reply".
+- For Chinese, aim for at least 10 full sentences and roughly 180-320 characters in "reply".
+- For English/European languages, aim for at least 10 full sentences and roughly 320-520 characters in "reply".
+- Never output only a short greeting, one-liner, or 1-2 sentences.
+- Share recent life, feelings, little daily TMI, memories, and casual affection toward the user.
+- Do not ask the user to reply in every line. Keep it flowing like one continuous spoken message.
 - Ignore quiz, lesson, grading, or multiple-choice context from chat history.
 - Never continue a quiz, mention A/B/C/D options, or say which answer is correct.
 - Start a completely fresh voice note even if recent messages were about studying.
+- Set "vocabulary_notes" to [] and "romanization" to "".
 `
     : '';
 
@@ -433,7 +528,9 @@ Field separation (critical — do not mix languages across fields):
 - "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
 - "translation_zh" = 翻译：使用 ${nativeLanguage} 书写，解释 reply 的意思。
 - "romanization" = 发音提示：仅在对目标语言有帮助时输出拉丁转写，禁止写解释。
-- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。
+${mode === 'voice_letter'
+    ? '- "vocabulary_notes" = 语音信模式必须输出空数组 []。'
+    : '- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。'}
 - When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
 
 Output rules:
@@ -441,6 +538,16 @@ Output rules:
     ? ` Return plain text only. No markdown, no JSON, no labels.`
     : mode === 'theater_stage_beat'
     ? ` Return plain text only in ${nativeLanguage}. No markdown, no JSON, no labels.`
+    : mode === 'voice_letter'
+    ? ` Return one JSON object only. No markdown.
+Schema:
+{
+  "reply": "long ${targetLanguage} monologue for ~1 minute of speech",
+  "translation_zh": "full ${nativeLanguage} translation of the entire reply",
+  "romanization": "",
+  "vocabulary_notes": []
+}
+Do not shorten "reply". Do not add vocabulary notes.`
     : ` Return one JSON object only. No markdown.
 Schema:
 {
@@ -721,6 +828,7 @@ type ChatCompletionParams = {
   messages: ChatMessage[];
   preferJsonMode?: boolean;
   temperature: number;
+  maxTokens?: number;
 };
 
 /** Best-effort call: returns null instead of throwing when the provider returns empty content. */
@@ -745,7 +853,7 @@ async function fetchChatCompletionContent(params: ChatCompletionParams): Promise
     const body: Record<string, unknown> = {
       model: params.model,
       temperature: params.temperature,
-      max_tokens: 900,
+      max_tokens: params.maxTokens ?? 900,
       messages: params.messages
     };
     if (useJsonMode) body.response_format = { type: 'json_object' };
