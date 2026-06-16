@@ -38,7 +38,8 @@ async function expandVoiceLetterIfTooShort(
 ): Promise<ChatReplyPayload> {
   const minLength = voiceLetterMinReplyLength(targetLanguageCode);
   if (reply.reply.trim().length >= minLength) {
-    return finalizeReplyPayload(reply, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+    const completed = await ensureReplyCompleteness(reply, ctx, nativeLanguageCode, targetLanguageCode, 'voice_letter');
+    return finalizeReplyPayload(completed, targetLanguageCode, nativeLanguageCode, 'voice_letter');
   }
 
   const targetLanguage = languageName(targetLanguageCode, 'the target language');
@@ -69,10 +70,12 @@ async function expandVoiceLetterIfTooShort(
 
   const parsed = parseStructuredReply(expanded, targetLanguageCode, nativeLanguageCode);
   if (!parsed) {
-    return finalizeReplyPayload(reply, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+    const completed = await ensureReplyCompleteness(reply, ctx, nativeLanguageCode, targetLanguageCode, 'voice_letter');
+    return finalizeReplyPayload(completed, targetLanguageCode, nativeLanguageCode, 'voice_letter');
   }
 
-  return finalizeReplyPayload(parsed, targetLanguageCode, nativeLanguageCode, 'voice_letter');
+  const completed = await ensureReplyCompleteness(parsed, ctx, nativeLanguageCode, targetLanguageCode, 'voice_letter');
+  return finalizeReplyPayload(completed, targetLanguageCode, nativeLanguageCode, 'voice_letter');
 }
 
 export async function generateChatReply(params: {
@@ -214,7 +217,7 @@ async function ensureReplyCompleteness(
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (mode !== 'teacher' && mode !== 'voice_letter' && mode !== 'theater_stage_beat' && mode !== 'theater' && !result.translation_zh.trim()) {
+  if (mode !== 'teacher' && mode !== 'theater_stage_beat' && mode !== 'theater' && !result.translation_zh.trim()) {
     const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
