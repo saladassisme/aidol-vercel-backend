@@ -386,7 +386,8 @@ function sanitizeTheaterStageBeatText(text: string, nativeLanguageCode?: string)
     .filter((line) => line && !looksLikeModelReasoning(line));
 
   const joined = (lines.length ? lines.join(' ') : cleaned).trim();
-  const nativeLine = lines.find((line) => containsExpectedLanguage(line, nativeLanguageCode)) ?? joined;
+  const nativeLine = lines.find((line) => containsExpectedLanguage(line, nativeLanguageCode));
+  if (!nativeLine) return '';
   return extractTextField(nativeLine, nativeLanguageCode) || nativeLine;
 }
 
