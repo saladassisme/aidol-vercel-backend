@@ -21,15 +21,31 @@ function limitFor(kind: UsageKind, limits: Awaited<ReturnType<typeof getMembersh
   }
 }
 
-async function ensureTheaterUsageColumn() {
-  await sql`
-    alter table daily_usage
-    add column if not exists theater_session_count int not null default 0
-  `;
+let quotaSchemaReady: Promise<void> | null = null;
+
+function ensureQuotaSchema() {
+  if (!quotaSchemaReady) {
+    quotaSchemaReady = (async () => {
+      await sql`
+        alter table daily_usage
+        add column if not exists theater_session_count int not null default 0
+      `;
+      await sql`
+        alter table users
+        add column if not exists tts_preview_used_at timestamptz
+      `;
+      await sql`
+        alter table users
+        add column if not exists voice_letter_trial_used_at timestamptz,
+        add column if not exists theater_trial_used_at timestamptz
+      `;
+    })();
+  }
+  return quotaSchemaReady;
 }
 
 export async function getTodayUsage(userId: string) {
-  await ensureTheaterUsageColumn();
+  await ensureQuotaSchema();
   await sql`
     insert into daily_usage (user_id, usage_date)
     values (${userId}, current_date)
@@ -56,18 +72,11 @@ export async function getTodayUsage(userId: string) {
 }
 
 async function ensureTTSPreviewTrialsTable() {
-  await sql`
-    alter table users
-    add column if not exists tts_preview_used_at timestamptz
-  `;
+  await ensureQuotaSchema();
 }
 
 async function ensureFeatureTrialsTable() {
-  await sql`
-    alter table users
-    add column if not exists voice_letter_trial_used_at timestamptz,
-    add column if not exists theater_trial_used_at timestamptz
-  `;
+  await ensureQuotaSchema();
 }
 
 export async function hasUsedFreeTTSPreview(userId: string) {
