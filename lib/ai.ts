@@ -490,6 +490,8 @@ Special mode: teacher
 
 Special mode: theater roleplay
 - Stay fully in character for the scene. Keep replies concise, emotional, and easy to continue.
+- The "reply" field must contain ONLY spoken dialogue in ${targetLanguage}. No narration, no action descriptions, no stage directions.
+- Never wrap actions or scene description in （）, (), or asterisks inside "reply". Those belong in separate stage-beat generation, not in dialogue.
 - Output JSON with reply and translation_zh. Leave vocabulary_notes as an empty array.
 - Do not add vocabulary notes.
 `
