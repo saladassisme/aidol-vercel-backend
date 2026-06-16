@@ -34,8 +34,8 @@ export function limitsForMember(isMember: boolean) {
 
   return {
     // Free tier defaults (can be raised via env, but never lowered below these minimums).
-    dailyChatReplies: quotaLimit('FREE_DAILY_CHAT_LIMIT', 50),
-    dailyTTS: quotaLimit('FREE_DAILY_TTS_LIMIT', 20),
+    dailyChatReplies: quotaLimit('FREE_DAILY_CHAT_LIMIT', 20),
+    dailyTTS: quotaLimit('FREE_DAILY_TTS_LIMIT', 5),
     monthlyVoiceClones: quotaLimit('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
     maxProfiles: 1,
     voiceEnabled: true,
