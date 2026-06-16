@@ -1,6 +1,7 @@
 import { requiredEnv, optionalEnv } from './env';
+import { dashscopeFetch } from './dashscopeFetch';
 
-function endpointBase() {
+export function dashscopeEndpointBase() {
   return optionalEnv('DASHSCOPE_REGION', 'china') === 'intl'
     ? 'https://dashscope-intl.aliyuncs.com'
     : 'https://dashscope.aliyuncs.com';
@@ -21,7 +22,7 @@ export async function cloneVoiceWithDashScope(params: {
   const base64 = params.audioData.toString('base64');
   const dataURI = `data:${params.mimeType || 'audio/wav'};base64,${base64}`;
 
-  const response = await fetch(`${endpointBase()}/api/v1/services/audio/tts/customization`, {
+  const response = await dashscopeFetch(`${dashscopeEndpointBase()}/api/v1/services/audio/tts/customization`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -36,7 +37,7 @@ export async function cloneVoiceWithDashScope(params: {
         audio: { data: dataURI }
       }
     })
-  });
+  }, 'voice.clone');
 
   const text = await response.text();
   if (!response.ok) throw new Error(`DashScope clone failed: HTTP ${response.status} ${text}`);
@@ -56,7 +57,7 @@ export async function synthesizeWithDashScope(params: {
   const model = params.model || optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
   const languageType = params.languageType || 'Korean';
 
-  const response = await fetch(`${endpointBase()}/api/v1/services/aigc/multimodal-generation/generation`, {
+  const response = await dashscopeFetch(`${dashscopeEndpointBase()}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -70,7 +71,7 @@ export async function synthesizeWithDashScope(params: {
         language_type: languageType
       }
     })
-  });
+  }, 'tts.synthesize');
 
   const text = await response.text();
   if (!response.ok) throw new Error(`DashScope synthesize failed: HTTP ${response.status} ${text}`);

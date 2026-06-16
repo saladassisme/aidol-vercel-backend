@@ -9,11 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "postgres": "^3.4.5",
     "jose": "^5.9.6",
     "next": "latest",
+    "postgres": "^3.4.5",
     "react": "latest",
     "react-dom": "latest",
+    "undici": "^7.28.0",
     "zod": "latest"
   },
   "devDependencies": {

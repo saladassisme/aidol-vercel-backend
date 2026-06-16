@@ -1,6 +1,6 @@
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
-import { cloneVoiceWithDashScope } from '@/lib/dashscope';
+import { cloneVoiceWithDashScope, dashscopeEndpointBase } from '@/lib/dashscope';
 import { sql } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     console.log(`[voice.clone] ${requestId} received file name=${file.name || 'unknown'} type=${file.type || 'unknown'} size=${file.size} preferredName=${preferredName}`);
     const arrayBuffer = await file.arrayBuffer();
 
-    console.log(`[voice.clone] ${requestId} dashscope clone start`);
+    console.log(`[voice.clone] ${requestId} dashscope clone start endpoint=${dashscopeEndpointBase()}`);
     const cloned = await cloneVoiceWithDashScope({
       audioData: Buffer.from(arrayBuffer),
       mimeType: file.type || 'audio/wav',
