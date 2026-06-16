@@ -230,22 +230,61 @@ export async function resolveAppleTransactionInfo(input: {
   throw new Error('transactionId or originalTransactionId is required.');
 }
 
+async function ensureSubscriptionIndexes() {
+  await sql`
+    create unique index if not exists idx_subscriptions_original_transaction_id_unique
+    on subscriptions (original_transaction_id)
+    where original_transaction_id is not null
+  `;
+}
+
 export async function upsertSubscriptionFromApple(userId: string, info: AppleTransactionInfo) {
+  await ensureSubscriptionIndexes();
+
   const expires = info.expiresDate ? new Date(Number(info.expiresDate)).toISOString() : null;
   const isActive = !info.revocationDate && (!expires || new Date(expires).getTime() > Date.now());
-  const id = crypto.randomUUID();
-  const original = info.originalTransactionId ?? info.transactionId;
+  const original = String(info.originalTransactionId ?? info.transactionId);
+  const status = isActive ? 'active' : 'inactive';
 
-  await sql`
-    insert into subscriptions (id, user_id, product_id, original_transaction_id, transaction_id, status, expires_at)
-    values (${id}, ${userId}, ${info.productId}, ${original}, ${info.transactionId}, ${isActive ? 'active' : 'inactive'}, ${expires})
-    on conflict (original_transaction_id) do update set
-      product_id = excluded.product_id,
-      transaction_id = excluded.transaction_id,
-      status = excluded.status,
-      expires_at = excluded.expires_at,
+  const updated = await sql<{ id: string }[]>`
+    update subscriptions
+    set
+      user_id = ${userId},
+      product_id = ${info.productId},
+      transaction_id = ${info.transactionId},
+      status = ${status},
+      expires_at = ${expires},
       updated_at = now()
+    where original_transaction_id = ${original}
+    returning id
   `;
+
+  if (!updated[0]) {
+    const id = crypto.randomUUID();
+    try {
+      await sql`
+        insert into subscriptions (id, user_id, product_id, original_transaction_id, transaction_id, status, expires_at)
+        values (${id}, ${userId}, ${info.productId}, ${original}, ${info.transactionId}, ${status}, ${expires})
+      `;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.toLowerCase().includes('duplicate') && !message.toLowerCase().includes('unique')) {
+        throw error;
+      }
+
+      await sql`
+        update subscriptions
+        set
+          user_id = ${userId},
+          product_id = ${info.productId},
+          transaction_id = ${info.transactionId},
+          status = ${status},
+          expires_at = ${expires},
+          updated_at = now()
+        where original_transaction_id = ${original}
+      `;
+    }
+  }
 
   if (isActive) {
     const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
