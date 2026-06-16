@@ -46,6 +46,14 @@ async function ensureTTSPreviewTrialsTable() {
   `;
 }
 
+async function ensureFeatureTrialsTable() {
+  await sql`
+    alter table users
+    add column if not exists voice_letter_trial_used_at timestamptz,
+    add column if not exists theater_trial_used_at timestamptz
+  `;
+}
+
 export async function hasUsedFreeTTSPreview(userId: string) {
   await ensureTTSPreviewTrialsTable();
   const rows = await sql<{ tts_preview_used_at: Date | null }[]>`
@@ -74,6 +82,65 @@ export async function refundFreeTTSPreview(userId: string) {
   await sql`
     update users
     set tts_preview_used_at = null
+    where id = ${userId}
+  `;
+}
+
+export async function getFeatureTrialStatus(userId: string) {
+  await ensureFeatureTrialsTable();
+  const rows = await sql<{
+    voice_letter_trial_used_at: Date | null;
+    theater_trial_used_at: Date | null;
+  }[]>`
+    select voice_letter_trial_used_at, theater_trial_used_at
+    from users
+    where id = ${userId}
+    limit 1
+  `;
+  return {
+    voiceLetterTrialUsed: Boolean(rows[0]?.voice_letter_trial_used_at),
+    theaterTrialUsed: Boolean(rows[0]?.theater_trial_used_at)
+  };
+}
+
+export async function claimVoiceLetterTrial(userId: string) {
+  await ensureFeatureTrialsTable();
+  const rows = await sql<{ id: string }[]>`
+    update users
+    set voice_letter_trial_used_at = coalesce(voice_letter_trial_used_at, now())
+    where id = ${userId}
+      and voice_letter_trial_used_at is null
+    returning id
+  `;
+  return Boolean(rows[0]);
+}
+
+export async function refundVoiceLetterTrial(userId: string) {
+  await ensureFeatureTrialsTable();
+  await sql`
+    update users
+    set voice_letter_trial_used_at = null
+    where id = ${userId}
+  `;
+}
+
+export async function claimTheaterTrial(userId: string) {
+  await ensureFeatureTrialsTable();
+  const rows = await sql<{ id: string }[]>`
+    update users
+    set theater_trial_used_at = coalesce(theater_trial_used_at, now())
+    where id = ${userId}
+      and theater_trial_used_at is null
+    returning id
+  `;
+  return Boolean(rows[0]);
+}
+
+export async function refundTheaterTrial(userId: string) {
+  await ensureFeatureTrialsTable();
+  await sql`
+    update users
+    set theater_trial_used_at = null
     where id = ${userId}
   `;
 }
