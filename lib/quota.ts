@@ -109,3 +109,32 @@ export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {
 
   return { remaining: Math.max(limit - current - 1, 0), limit };
 }
+
+export async function refundConsumedQuota(userId: string, kind: UsageKind) {
+  await sql`
+    insert into daily_usage (user_id, usage_date)
+    values (${userId}, current_date)
+    on conflict (user_id, usage_date) do nothing
+  `;
+
+  const col = columnFor(kind);
+  if (col === 'chat_reply_count') {
+    await sql`
+      update daily_usage
+      set chat_reply_count = greatest(chat_reply_count - 1, 0)
+      where user_id = ${userId} and usage_date = current_date
+    `;
+  } else if (col === 'tts_count') {
+    await sql`
+      update daily_usage
+      set tts_count = greatest(tts_count - 1, 0)
+      where user_id = ${userId} and usage_date = current_date
+    `;
+  } else {
+    await sql`
+      update daily_usage
+      set voice_clone_count = greatest(voice_clone_count - 1, 0)
+      where user_id = ${userId} and usage_date = current_date
+    `;
+  }
+}

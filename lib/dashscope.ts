@@ -1,11 +1,8 @@
 import { requiredEnv, optionalEnv } from './env';
-import { dashscopeFetch } from './dashscopeFetch';
+import { dashscopeFetch, dashscopeDownload } from './dashscopeFetch';
+import { dashscopeEndpointBase } from './dashscopeRegion';
 
-export function dashscopeEndpointBase() {
-  return optionalEnv('DASHSCOPE_REGION', 'china') === 'intl'
-    ? 'https://dashscope-intl.aliyuncs.com'
-    : 'https://dashscope.aliyuncs.com';
-}
+export { dashscopeEndpointBase, dashscopeRegion } from './dashscopeRegion';
 
 function normalizeURL(url: string) {
   const trimmed = url.trim();
@@ -79,4 +76,17 @@ export async function synthesizeWithDashScope(params: {
   const audioURL = json.output?.audio?.url ?? json.output?.audio_url ?? json.audio_url;
   if (!audioURL) throw new Error(`DashScope synthesize succeeded but no audio URL was returned: ${text}`);
   return { audioURL: normalizeURL(String(audioURL)), raw: json };
+}
+
+export async function downloadDashScopeAudio(audioURL: string) {
+  const response = await dashscopeDownload(audioURL, 'tts.audio-download');
+  if (!response.ok) {
+    throw new Error(`音频下载失败：HTTP ${response.status}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  const bytes = Buffer.from(arrayBuffer);
+  if (!bytes.length) {
+    throw new Error('音频下载失败：空文件');
+  }
+  return { audioBase64: bytes.toString('base64') };
 }

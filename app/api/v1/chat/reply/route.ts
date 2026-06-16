@@ -3,6 +3,7 @@ import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { assertAndConsumeQuota } from '@/lib/quota';
 import { generateChatReply } from '@/lib/ai';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
@@ -26,6 +27,7 @@ const BodySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  logIncomingRequest('chat.reply', request);
   try {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;

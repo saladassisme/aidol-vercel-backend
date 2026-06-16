@@ -1,9 +1,11 @@
 import { ok } from '@/lib/response';
 import { databaseURL } from '@/lib/pg-env';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
-export async function GET() {
+export async function GET(request: Request) {
+  logIncomingRequest('health', request);
   let host = 'unknown';
   let port = '';
   let mode: 'pooler' | 'direct' | 'other' = 'other';

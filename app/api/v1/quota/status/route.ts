@@ -2,10 +2,12 @@ import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { getMembership } from '@/lib/membership';
 import { getTodayUsage } from '@/lib/quota';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: Request) {
+  logIncomingRequest('quota.status', request);
   try {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;

@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
-import { assertAndConsumeQuota, claimFreeTTSPreview, refundFreeTTSPreview } from '@/lib/quota';
-import { synthesizeWithDashScope } from '@/lib/dashscope';
+import { assertAndConsumeQuota, claimFreeTTSPreview, refundConsumedQuota, refundFreeTTSPreview } from '@/lib/quota';
+import { downloadDashScopeAudio, synthesizeWithDashScope } from '@/lib/dashscope';
 import { sha256Hex } from '@/lib/hash';
 import { sql } from '@/lib/db';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
@@ -15,8 +16,44 @@ const BodySchema = z.object({
   languageType: z.string().optional()
 });
 
+function formatTTSError(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Unknown error';
+  const lower = message.toLowerCase();
+
+  if (lower.includes('daily quota exceeded') || lower.includes('requires membership')) {
+    return {
+      message: '今日语音回复额度已用完，请明天再试或开通会员。',
+      status: 403,
+      code: 'TTS_QUOTA_EXCEEDED'
+    };
+  }
+
+  if (
+    lower.includes('dashscope')
+    || lower.includes('连接')
+    || lower.includes('timeout')
+    || lower.includes('timed out')
+    || lower.includes('fetch failed')
+    || lower.includes('etimedout')
+  ) {
+    return {
+      message: '语音合成服务连接超时，请稍后重试。',
+      status: 503,
+      code: 'TTS_UPSTREAM_TIMEOUT'
+    };
+  }
+
+  return {
+    message,
+    status: 500,
+    code: 'TTS_SYNTHESIZE_FAILED'
+  };
+}
+
 export async function POST(request: Request) {
+  logIncomingRequest('tts.synthesize', request);
   let claimedTrial = false;
+  let consumedQuota = false;
   let userId: string | null = null;
   try {
     const auth = await requireAuth(request);
@@ -44,7 +81,7 @@ export async function POST(request: Request) {
     if (cached[0]) {
       let audioBase64 = cached[0].audio_base64;
       if (!audioBase64) {
-        const downloaded = await fetchAudioAsBase64(cached[0].audio_url);
+        const downloaded = await downloadDashScopeAudio(cached[0].audio_url);
         audioBase64 = downloaded.audioBase64;
         await sql`
           update tts_cache
@@ -66,10 +103,11 @@ export async function POST(request: Request) {
       if (!claimedTrial) return fail('免费试听已用完，请开通会员后继续。', 403, 'MEMBERSHIP_REQUIRED');
     } else {
       await assertAndConsumeQuota(auth.userId, 'tts');
+      consumedQuota = true;
     }
 
     const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: body.voiceId, model, languageType });
-    const downloaded = await fetchAudioAsBase64(synthesized.audioURL);
+    const downloaded = await downloadDashScopeAudio(synthesized.audioURL);
 
     await sql`
       insert into tts_cache (id, user_id, voice_id, model, text_hash, audio_url, audio_base64)
@@ -81,6 +119,13 @@ export async function POST(request: Request) {
 
     return ok({ audioUrl: synthesized.audioURL, audioBase64: downloaded.audioBase64, cached: false });
   } catch (error) {
+    if (consumedQuota && userId) {
+      try {
+        await refundConsumedQuota(userId, 'tts');
+      } catch {
+        // Ignore refund failures; the client can refresh quota status.
+      }
+    }
     if (claimedTrial && userId) {
       try {
         await refundFreeTTSPreview(userId);
@@ -88,19 +133,7 @@ export async function POST(request: Request) {
         // Ignore refund failures; the user can retry from the preview flow.
       }
     }
-    return fail(error instanceof Error ? error.message : 'Unknown error', 500, 'TTS_SYNTHESIZE_FAILED');
+    const formatted = formatTTSError(error);
+    return fail(formatted.message, formatted.status, formatted.code);
   }
-}
-
-async function fetchAudioAsBase64(audioUrl: string) {
-  const response = await fetch(audioUrl);
-  if (!response.ok) {
-    throw new Error(`音频下载失败：HTTP ${response.status}`);
-  }
-  const arrayBuffer = await response.arrayBuffer();
-  const bytes = Buffer.from(arrayBuffer);
-  if (!bytes.length) {
-    throw new Error('音频下载失败：空文件');
-  }
-  return { audioBase64: bytes.toString('base64') };
 }

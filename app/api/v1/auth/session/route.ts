@@ -1,9 +1,11 @@
 import { ok, fail } from '@/lib/response';
 import { getOrCreateUser } from '@/lib/db';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
+  logIncomingRequest('auth.session', request);
   try {
     const body = await request.json().catch(() => ({}));
     const deviceId = String(body.deviceId || request.headers.get('x-aidol-device-id') || '').trim();

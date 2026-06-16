@@ -2,11 +2,13 @@ import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { cloneVoiceWithDashScope, dashscopeEndpointBase } from '@/lib/dashscope';
 import { sql } from '@/lib/db';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
 
 export async function POST(request: Request) {
+  logIncomingRequest('voice.clone', request);
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
   try {

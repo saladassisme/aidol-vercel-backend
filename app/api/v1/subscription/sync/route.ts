@@ -2,10 +2,12 @@ import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { fetchAppleTransactionInfo, upsertSubscriptionFromApple } from '@/lib/apple';
 import { getMembership } from '@/lib/membership';
+import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
+  logIncomingRequest('subscription.sync', request);
   try {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;
