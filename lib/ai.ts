@@ -359,6 +359,9 @@ Special mode: voice letter
 - Focus on the character's recent life, feelings, little daily TMI, and casual affection toward the user.
 - Do not ask the user to reply in every line. Keep it flowing like a spoken message.
 - Keep the reply natural, easy to speak, and slightly longer than a normal chat reply.
+- Ignore quiz, lesson, grading, or multiple-choice context from chat history.
+- Never continue a quiz, mention A/B/C/D options, or say which answer is correct.
+- Start a completely fresh voice note even if recent messages were about studying.
 `
     : '';
 

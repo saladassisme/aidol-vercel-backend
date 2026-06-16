@@ -14,6 +14,16 @@ export async function POST(request: Request) {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;
 
+    const contentType = request.headers.get('content-type') || '';
+    if (!contentType.toLowerCase().includes('multipart/form-data')) {
+      console.error(`[voice.clone] ${requestId} invalid content-type="${contentType}"`);
+      return fail(
+        'Request must use multipart/form-data with an audio file field.',
+        400,
+        'INVALID_CONTENT_TYPE'
+      );
+    }
+
     const form = await request.formData();
     const file = form.get('audio');
     if (!(file instanceof File)) return fail('audio file is required.', 400, 'MISSING_AUDIO');
