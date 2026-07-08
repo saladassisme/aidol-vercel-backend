@@ -81,6 +81,9 @@ async function expandVoiceLetterIfTooShort(
 export async function generateChatReply(params: {
   persona: string;
   nickname: string;
+  isRealPerson?: boolean;
+  realName?: string;
+  groupName?: string;
   mode?: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater';
   messages: ChatMessage[];
   nativeLanguageCode?: string;
@@ -94,41 +97,65 @@ export async function generateChatReply(params: {
 }) {
   const baseURL = requiredEnv('AI_API_BASE_URL').replace(/\/$/, '');
   const apiKey = requiredEnv('AI_API_KEY');
-  const model = optionalEnv('AI_TEXT_MODEL', 'gpt-4o-mini');
+  const chatModel = optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', 'qwen-flash'));
+  const theaterModel = optionalEnv('AI_TEXT_MODEL_THEATER', optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', 'qwen-flash')));
+  const theaterStageBeatModel = optionalEnv('AI_TEXT_MODEL_THEATER_STAGE_BEAT', theaterModel);
+  const voiceLetterModel = optionalEnv('AI_TEXT_MODEL_VOICE_LETTER', optionalEnv('AI_TEXT_MODEL_STRONG', 'qwen-plus'));
+  const mode = params.mode ?? 'chat';
+  const model = mode === 'voice_letter'
+    ? voiceLetterModel
+    : mode === 'theater' || mode === 'theater_stage_beat'
+      ? theaterStageBeatModel
+      : chatModel;
 
   const system = buildSystemPrompt(
     params.persona,
     params.nickname,
+    params.isRealPerson ?? false,
+    params.realName ?? '',
+    params.groupName ?? '',
     params.mode ?? 'chat',
     params.nativeLanguageCode,
     params.targetLanguageCode,
     params.languageLevelCode,
     params.studyVocabularyEntries ?? []
   );
-  const requestMessages = params.messages.slice(-12);
-  if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'teacher') {
+  const requestMessages = mode === 'voice_letter'
+    ? filterVoiceLetterMessages(params.messages).slice(-8)
+    : mode === 'theater' || mode === 'theater_stage_beat'
+      ? params.messages.slice(-4)
+      : params.messages.slice(-6);
+  if (requestMessages.length === 0 && mode === 'teacher') {
     requestMessages.push({ role: 'user', content: 'Start a new multiple-choice quiz for the current learning context.' });
   }
-  if (requestMessages.length === 0 && (params.mode ?? 'chat') === 'voice_letter') {
+  if (requestMessages.length === 0 && mode === 'voice_letter') {
     requestMessages.push({
       role: 'user',
-      content: "[Start today's voice letter: a full ~one-minute warm spoken monologue with recent life updates, feelings, and casual affection. Not a short greeting.]"
+      content: "[Start today's voice letter: a full ~one-minute warm spoken monologue. Prioritize persona and real-person identity first; use chat history only as a weak hint and ignore test or quiz noise. Not a short greeting.]"
     });
   }
-  const maxTokens = (params.mode ?? 'chat') === 'voice_letter' ? 2200 : 900;
+  const maxTokens = mode === 'voice_letter'
+    ? 1500
+    : mode === 'theater_stage_beat'
+      ? 96
+      : mode === 'theater'
+        ? 320
+        : mode === 'teacher'
+          ? 600
+          : 620;
   const rawContent = await requestChatCompletion({
     baseURL,
     apiKey,
     model,
     messages: [{ role: 'system', content: system }, ...requestMessages],
-    preferJsonMode: (params.mode ?? 'chat') !== 'teacher' && (params.mode ?? 'chat') !== 'theater_stage_beat',
+    preferJsonMode: mode !== 'teacher' && mode !== 'theater_stage_beat',
     temperature: 0.75,
     maxTokens
   });
 
   const ctx = { baseURL, apiKey, model };
 
-  if ((params.mode ?? 'chat') === 'teacher') {
+  if (mode === 'teacher') {
     const teacherReply = parseTeacherReply(rawContent);
     const reply = sanitizeTeacherReplyText(teacherReply?.reply ?? normalizeTeacherReply(rawContent));
     if (!reply.trim()) {
@@ -142,7 +169,7 @@ export async function generateChatReply(params: {
     };
   }
 
-  if ((params.mode ?? 'chat') === 'theater_stage_beat') {
+  if (mode === 'theater_stage_beat') {
     const beat = sanitizeTheaterStageBeatText(rawContent, params.nativeLanguageCode);
     return {
       reply: beat,
@@ -201,6 +228,33 @@ export async function generateChatReply(params: {
   throw new Error('AI provider returned non-JSON content.');
 }
 
+function filterVoiceLetterMessages(messages: ChatMessage[]) {
+  return messages.filter((message) => !isVoiceLetterNoise(message.content));
+}
+
+function isVoiceLetterNoise(content: string) {
+  const text = content.trim();
+  if (!text) return true;
+
+  const lowered = text.toLowerCase();
+  if (text.length <= 2) return true;
+
+  const markers = [
+    'test', 'testing', 'debug', 'sample', 'demo', 'placeholder', 'tmp', 'draft',
+    'quiz', 'multiple choice', 'correct answer', 'answer key',
+    '测试', '試験', '試し', '检验', '測試', '草稿', '占位', '自检', '调试'
+  ];
+  if (markers.some((marker) => lowered.includes(marker) || text.includes(marker))) {
+    return true;
+  }
+
+  if (/^[\d\s.,!?~`'"\-_=+*/\\|()[\]{}<>:;]+$/.test(text)) {
+    return true;
+  }
+
+  return false;
+}
+
 async function ensureReplyCompleteness(
   reply: ChatReplyPayload,
   ctx: { baseURL: string; apiKey: string; model: string },
@@ -242,8 +296,12 @@ async function ensureReplyCompleteness(
       nativeLanguageCode
     );
     if (validNotes.length < 2 && result.reply.trim()) {
-      const repaired = await repairVocabularyNotes(result.reply, ctx, nativeLanguageCode, targetLanguageCode);
-      if (repaired.length) result.vocabulary_notes = repaired;
+      const generic = genericVocabularyNotes(result.reply, targetLanguageCode, nativeLanguageCode);
+      if (generic.length > 0) {
+        result.vocabulary_notes = generic.length >= validNotes.length ? generic : validNotes;
+      } else {
+        result.vocabulary_notes = validNotes;
+      }
     } else {
       result.vocabulary_notes = validNotes;
     }
@@ -420,6 +478,9 @@ function stripTeacherReplyEnvelope(text: string) {
 function buildSystemPrompt(
   persona: string,
   nickname: string,
+  isRealPerson: boolean,
+  realName: string,
+  groupName: string,
   mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater',
   nativeLanguageCode?: string,
   targetLanguageCode?: string,
@@ -433,6 +494,7 @@ function buildSystemPrompt(
   const nativeLanguage = languageName(nativeLanguageCode, 'Chinese');
   const targetLanguage = languageName(targetLanguageCode, 'Korean');
   const languageLevel = languageLevelName(languageLevelCode, 'Intermediate');
+  const includeStudyVocabularyBlock = mode !== 'voice_letter' && mode !== 'theater' && mode !== 'theater_stage_beat';
   const studyVocabularyBlock = studyVocabularyEntries.length
     ? `\nStudy vocabulary book entries:\n${studyVocabularyEntries.map((entry, index) => {
         const pieces = [
@@ -455,9 +517,14 @@ Special mode: voice letter
 - For Chinese, aim for at least 10 full sentences and roughly 180-320 characters in "reply".
 - For English/European languages, aim for at least 10 full sentences and roughly 320-520 characters in "reply".
 - Never output only a short greeting, one-liner, or 1-2 sentences.
+- Use persona and real-person context as the primary anchor. Recent chat history is only a weak hint.
+- Priority order: real-person context + persona > stable recurring interests > a few meaningful recent chats > learning-language context > everything else.
+- If recent chat history contains tests, quizzes, rehearsal text, placeholder content, onboarding noise, or other one-off experiments, ignore them.
+- Do not overfit to the latest message. If the newest chat is a test or a throwaway message, pretend it never happened.
+- Focus on the user's likely emotional connection to the idol/character, recurring interests, and stable preferences.
+- If the user is learning the target language, mention it only lightly and naturally. Do not turn the voice letter into a lesson.
 - Share recent life, feelings, little daily TMI, memories, and casual affection toward the user.
 - Do not ask the user to reply in every line. Keep it flowing like one continuous spoken message.
-- Ignore quiz, lesson, grading, or multiple-choice context from chat history.
 - Never continue a quiz, mention A/B/C/D options, or say which answer is correct.
 - Start a completely fresh voice note even if recent messages were about studying.
 - Set "vocabulary_notes" to [] and "romanization" to "".
@@ -513,12 +580,29 @@ Special mode: theater stage beat
 `
     : '';
 
+  const realPersonName = realName.trim();
+  const realPersonGroup = groupName.trim();
+  const realPersonInstructions = isRealPerson
+    ? `
+
+Real-person context (highest-priority identity anchor):
+- Real name: ${realPersonName || 'N/A'}
+- Group / team / circle: ${realPersonGroup || 'N/A'}
+- Use this context to shape identity, stage presence, social tone, and recurring daily life details.
+- Treat this as the strongest style reference whenever it conflicts with the generic persona.
+- Priority order: real-person context > persona > recent chat context > generic fallback style.
+- Never claim the AI is literally the real person; remain a fictional chat simulation inspired by the provided identity.
+- Keep the real-person anchor active throughout the conversation and draw from it whenever it improves the reply.
+`
+    : '';
+
   return `You are generating a reply for an idol-style private chat simulation.
 
 Character nickname (display only): ${nickname}
 
 Persona:
 ${persona}
+${realPersonInstructions}
 
 Language pair:
 - Target language (reply in this language): ${targetLanguage}
@@ -528,15 +612,16 @@ ${voiceLetterInstructions}
 ${teacherInstructions}
 ${theaterInstructions}
 ${theaterStageBeatInstructions}
-${studyVocabularyBlock}
+${includeStudyVocabularyBlock ? studyVocabularyBlock : ''}
 
 Field separation (critical — do not mix languages across fields):
 - "reply" = 原文：仅 ${targetLanguage}，可含表情符号，禁止混入其他语言。
 - "translation_zh" = 翻译：使用 ${nativeLanguage} 书写，解释 reply 的意思。
 - "romanization" = 发音提示：仅在对目标语言有帮助时输出拉丁转写，禁止写解释。
+- Normal chat: always include "translation_zh" and 2-3 short "vocabulary_notes".
 ${mode === 'voice_letter'
     ? '- "vocabulary_notes" = 语音信模式必须输出空数组 []。'
-    : '- "vocabulary_notes" = 单词/短句注解：2–5 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。'}
+    : '- "vocabulary_notes" = 单词/短句注解：2–3 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。'}
 - When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
 
 Output rules:
@@ -1186,7 +1271,7 @@ function sanitizeVocabularyNotes(
     notes.push({ term: extractReplyText(term, targetLanguageCode) || term, romanization: noteRom, explanation_zh: cleanedExplanation });
   }
 
-  return notes.slice(0, 6);
+  return notes.slice(0, 3);
 }
 
 function parseNoteLine(line: string) {
@@ -1199,6 +1284,175 @@ function parseNoteLine(line: string) {
     if (term && explanation_zh) return { term, romanization: '', explanation_zh };
   }
   return null;
+}
+
+function genericVocabularyNotes(
+  reply: string,
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string
+): ChatReplyPayload['vocabulary_notes'] {
+  const candidates = splitVocabularyCandidates(reply);
+  const notes: ChatReplyPayload['vocabulary_notes'] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    const term = trimVocabularyTerm(candidate);
+    if (
+      !term ||
+      seen.has(term) ||
+      !isValidGenericVocabularyTerm(term, reply, targetLanguageCode)
+    ) {
+      continue;
+    }
+
+    notes.push({
+      term,
+      romanization: '',
+      explanation_zh: genericVocabularyExplanation(nativeLanguageCode, term.includes(' '), targetLanguageCode)
+    });
+    seen.add(term);
+    if (notes.length >= 3) break;
+  }
+
+  if (notes.length < 2) {
+    const fallbackTerms = splitFallbackTerms(reply, targetLanguageCode);
+    for (const term of fallbackTerms) {
+      const trimmed = trimVocabularyTerm(term);
+      if (
+        !trimmed ||
+        seen.has(trimmed) ||
+        !isValidGenericVocabularyTerm(trimmed, reply, targetLanguageCode)
+      ) {
+        continue;
+      }
+
+      notes.push({
+        term: trimmed,
+        romanization: '',
+        explanation_zh: genericVocabularyExplanation(nativeLanguageCode, trimmed.includes(' '), targetLanguageCode)
+      });
+      seen.add(trimmed);
+      if (notes.length >= 3) break;
+    }
+  }
+
+  return notes;
+}
+
+function splitVocabularyCandidates(reply: string) {
+  const normalized = reply
+    .replace(/\n/g, '。')
+    .replace(/…/g, '。')
+    .replace(/！/g, '!')
+    .replace(/？/g, '?');
+
+  return normalized
+    .split(/[。.!?;；,，、|]/)
+    .map((part) => trimVocabularyTerm(part))
+    .filter(Boolean);
+}
+
+function splitFallbackTerms(reply: string, targetLanguageCode?: string) {
+  const candidates = splitVocabularyCandidates(reply);
+  if (candidates.length > 0) return candidates;
+
+  const words = reply
+    .split(/\s+/)
+    .map((part) => trimVocabularyTerm(part))
+    .filter(Boolean);
+
+  if (words.length <= 3) return words;
+
+  const language = (targetLanguageCode || '').toLowerCase();
+  if (['en', 'es', 'fr', 'de', 'it', 'pt'].includes(language)) {
+    return [words.slice(0, 2).join(' '), words.slice(-2).join(' ')];
+  }
+
+  return [words.slice(0, 3).join(''), words.slice(-3).join('')];
+}
+
+function trimVocabularyTerm(text: string) {
+  return text.trim().replace(/^[“”"'()\[\]{}<>《》【】]+/, '').replace(/[“”"'()\[\]{}<>《》【】]+$/, '').replace(/[.,!?！？。；;:，、]+$/, '').trim();
+}
+
+function isValidGenericVocabularyTerm(
+  term: string,
+  fullText: string,
+  targetLanguageCode?: string
+) {
+  const trimmedTerm = term.trim();
+  const trimmedText = fullText.trim();
+  if (!trimmedTerm || trimmedTerm === trimmedText) return false;
+  if (trimmedTerm.length > 18) return false;
+  if (!trimmedText.includes(trimmedTerm)) return false;
+
+  const language = (targetLanguageCode || '').toLowerCase();
+  if (language === 'zh' || language === 'zh-hans' || language === 'zh-hant' || language === 'zh-tw') {
+    return trimmedTerm.length >= 2;
+  }
+  if (language === 'ko' || language === 'ja' || language === 'ru') {
+    return trimmedTerm.length >= 2;
+  }
+
+  const wordCount = trimmedTerm.split(/\s+/).filter(Boolean).length;
+  return wordCount >= 1 && wordCount <= 5;
+}
+
+function genericVocabularyExplanation(
+  nativeLanguageCode?: string,
+  isPhrase = false,
+  targetLanguageCode?: string
+) {
+  const native = (nativeLanguageCode || '').toLowerCase();
+  const isShortPhrase = isPhrase;
+
+  switch (native) {
+    case 'en':
+      return isShortPhrase
+        ? 'A common phrase used in conversation.'
+        : 'A common word used in conversation.';
+    case 'ja':
+      return isShortPhrase
+        ? '会話でよく使う表現です。'
+        : '会話でよく使う単語です。';
+    case 'ko':
+      return isShortPhrase
+        ? '대화에서 자주 쓰는 표현이에요.'
+        : '대화에서 자주 쓰는 단어예요.';
+    case 'es':
+      return isShortPhrase
+        ? 'Expresión común de conversación.'
+        : 'Palabra común de conversación.';
+    case 'fr':
+      return isShortPhrase
+        ? 'Expression courante en conversation.'
+        : 'Mot courant en conversation.';
+    case 'de':
+      return isShortPhrase
+        ? 'Häufige Redewendung im Gespräch.'
+        : 'Häufiges Wort im Gespräch.';
+    case 'it':
+      return isShortPhrase
+        ? 'Espressione comune nella conversazione.'
+        : 'Parola comune nella conversazione.';
+    case 'pt':
+      return isShortPhrase
+        ? 'Expressão comum em conversas.'
+        : 'Palavra comum em conversas.';
+    case 'ru':
+      return isShortPhrase
+        ? 'Распространённое выражение в разговоре.'
+        : 'Распространённое слово в разговоре.';
+    default:
+      if ((targetLanguageCode || '').toLowerCase() === 'ko') {
+        return isShortPhrase
+          ? '대화에서 자주 쓰는 표현이에요.'
+          : '대화에서 자주 쓰는 단어예요.';
+      }
+      return isShortPhrase
+        ? '常用短语，适合整体记忆。'
+        : '常用单词，适合先单独记住。';
+  }
 }
 
 function parseLooseThreePartReply(

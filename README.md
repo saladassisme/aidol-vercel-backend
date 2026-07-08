@@ -59,11 +59,23 @@ See `.env.example`. The backend accepts **either** the names below or their lega
 | `LLM_API_BASE_URL` | `AI_API_BASE_URL` |
 | `LLM_API_KEY` | `AI_API_KEY` |
 | `LLM_MODEL` | `AI_TEXT_MODEL` |
+| `AI_TEXT_MODEL_CHAT` | chat 默认模型 |
+| `AI_TEXT_MODEL_THEATER` | theater 默认模型 |
+| `AI_TEXT_MODEL_THEATER_STAGE_BEAT` | theater_stage_beat 默认模型 |
+| `AI_TEXT_MODEL_VOICE_LETTER` | voice_letter 模型 |
+| `AI_TEXT_MODEL_STRONG` | 强模型别名 |
 | `APPLE_BUNDLE_ID` | `AIDOL_BUNDLE_ID` |
 | `APPLE_MONTHLY_PRODUCT_ID` | `AIDOL_PRODUCT_MONTHLY` |
 | `APPLE_YEARLY_PRODUCT_ID` | `AIDOL_PRODUCT_YEARLY` |
 
 Also required: `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`, `DASHSCOPE_API_KEY`.
+
+For overseas deployments, set the LLM proxy to DashScope International:
+
+- `LLM_API_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+- `LLM_MODEL=qwen-flash`
+
+If the live Vercel environment already has `LLM_API_BASE_URL` / `LLM_MODEL` set, those values win over the sample defaults in `.env.example`.
 
 Optional: `APPLE_ENVIRONMENT` (`sandbox` or `production`; the server will try both when verifying transactions), `DASHSCOPE_REGION`, `DASHSCOPE_TTS_VC_MODEL`, `FREE_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_CHAT_LIMIT`, `MEMBER_DAILY_TTS_LIMIT`, `MEMBER_MONTHLY_VOICE_CLONE_LIMIT`.
 

@@ -1,4 +1,5 @@
 import { sql } from './db';
+import { optionalEnv, optionalEnvInt } from './env';
 import { getMembership } from './membership';
 
 export type UsageKind = 'chat' | 'tts' | 'voice_clone' | 'theater_session';
@@ -21,9 +22,16 @@ function limitFor(kind: UsageKind, limits: Awaited<ReturnType<typeof getMembersh
   }
 }
 
+function chatReplyLimit(isMember: boolean) {
+  return Math.max(optionalEnvInt(isMember ? 'MEMBER_DAILY_CHAT_LIMIT' : 'FREE_DAILY_CHAT_LIMIT', isMember ? 200 : 20), isMember ? 200 : 20);
+}
+
 let quotaSchemaReady: Promise<void> | null = null;
 
 function ensureQuotaSchema() {
+  if (process.env.NODE_ENV === 'production') {
+    return Promise.resolve();
+  }
   if (!quotaSchemaReady) {
     quotaSchemaReady = (async () => {
       await sql`
@@ -46,18 +54,17 @@ function ensureQuotaSchema() {
 
 export async function getTodayUsage(userId: string) {
   await ensureQuotaSchema();
-  await sql`
-    insert into daily_usage (user_id, usage_date)
-    values (${userId}, current_date)
-    on conflict (user_id, usage_date) do nothing
-  `;
-
   const rows = await sql<{
     chat_reply_count: number;
     tts_count: number;
     voice_clone_count: number;
     theater_session_count: number;
   }[]>`
+    with ensured as (
+      insert into daily_usage (user_id, usage_date)
+      values (${userId}, current_date)
+      on conflict (user_id, usage_date) do nothing
+    )
     select chat_reply_count, tts_count, voice_clone_count, theater_session_count
     from daily_usage
     where user_id = ${userId} and usage_date = current_date
@@ -70,6 +77,32 @@ export async function getTodayUsage(userId: string) {
     theater_session_count: 0
   };
 }
+
+export type AccessAndQuotaRow = {
+  id: string;
+  device_id: string;
+  product_id: string | null;
+  expires_at: string | null;
+  plan: 'free' | 'monthly' | 'yearly';
+  is_member: boolean;
+  quota_remaining: number;
+  quota_limit: number;
+};
+
+export type QuotaStatusRow = {
+  id: string;
+  device_id: string;
+  product_id: string | null;
+  expires_at: string | null;
+  plan: 'free' | 'monthly' | 'yearly';
+  is_member: boolean;
+  chat_reply_count: number;
+  tts_count: number;
+  voice_clone_count: number;
+  theater_session_count: number;
+  voice_letter_trial_used_at: Date | null;
+  theater_trial_used_at: Date | null;
+};
 
 async function ensureTTSPreviewTrialsTable() {
   await ensureQuotaSchema();
@@ -161,6 +194,163 @@ export async function claimTheaterTrial(userId: string) {
   return Boolean(rows[0]);
 }
 
+export async function getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId: string) {
+  await ensureQuotaSchema();
+
+  const id = crypto.randomUUID();
+  const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
+  const yearly = optionalEnv('AIDOL_PRODUCT_YEARLY', 'aidol.membership.yearly');
+  const freeLimit = chatReplyLimit(false);
+  const memberLimit = chatReplyLimit(true);
+
+  const rows = await sql<AccessAndQuotaRow[]>`
+    with inserted as (
+      insert into users (id, device_id)
+      values (${id}, ${deviceId})
+      on conflict (device_id) do nothing
+      returning id, device_id
+    ),
+    user_row as (
+      select id, device_id from inserted
+      union all
+      select id, device_id
+      from users
+      where device_id = ${deviceId}
+        and not exists (select 1 from inserted)
+      limit 1
+    ),
+    membership_row as (
+      select product_id, expires_at,
+        case
+          when product_id = ${yearly} then 'yearly'
+          when product_id = ${monthly} then 'monthly'
+          else 'monthly'
+        end as plan
+      from subscriptions
+      where user_id = (select id from user_row)
+        and status = 'active'
+        and (expires_at is null or expires_at > now())
+      order by
+        case
+          when product_id = ${yearly} then 0
+          when product_id = ${monthly} then 1
+          else 2
+        end,
+        expires_at desc nulls first
+      limit 1
+    ),
+    quota_limit as (
+      select case
+        when exists (select 1 from membership_row) then ${memberLimit}::int
+        else ${freeLimit}::int
+      end as chat_limit
+    ),
+    quota_row as (
+      insert into daily_usage (user_id, usage_date, chat_reply_count)
+      select user_row.id, current_date, 1
+      from user_row
+      on conflict (user_id, usage_date) do update
+      set chat_reply_count = daily_usage.chat_reply_count + 1
+      where daily_usage.chat_reply_count < (select chat_limit from quota_limit)
+      returning chat_reply_count
+    )
+    select
+      user_row.id,
+      user_row.device_id,
+      membership_row.product_id,
+      membership_row.expires_at,
+      coalesce(membership_row.plan, 'free') as plan,
+      membership_row.product_id is not null as is_member,
+      quota_row.chat_reply_count as quota_remaining,
+      (select chat_limit from quota_limit) as quota_limit
+    from user_row
+    left join membership_row on true
+    left join quota_row on true
+    limit 1
+  `;
+
+  const row = rows[0];
+  if (!row || row.quota_remaining == null) {
+    throw new Error('Daily quota exceeded for chat.');
+  }
+
+  return row;
+}
+
+export async function getOrCreateUserQuotaStatus(deviceId: string) {
+  await ensureQuotaSchema();
+
+  const id = crypto.randomUUID();
+  const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
+  const yearly = optionalEnv('AIDOL_PRODUCT_YEARLY', 'aidol.membership.yearly');
+
+  const rows = await sql<QuotaStatusRow[]>`
+    with inserted as (
+      insert into users (id, device_id)
+      values (${id}, ${deviceId})
+      on conflict (device_id) do nothing
+      returning id, device_id
+    ),
+    user_row as (
+      select id, device_id from inserted
+      union all
+      select id, device_id
+      from users
+      where device_id = ${deviceId}
+        and not exists (select 1 from inserted)
+      limit 1
+    ),
+    membership_row as (
+      select product_id, expires_at,
+        case
+          when product_id = ${yearly} then 'yearly'
+          when product_id = ${monthly} then 'monthly'
+          else 'monthly'
+        end as plan
+      from subscriptions
+      where user_id = (select id from user_row)
+        and status = 'active'
+        and (expires_at is null or expires_at > now())
+      order by
+        case
+          when product_id = ${yearly} then 0
+          when product_id = ${monthly} then 1
+          else 2
+        end,
+        expires_at desc nulls first
+      limit 1
+    ),
+    usage_init as (
+      insert into daily_usage (user_id, usage_date)
+      select id, current_date
+      from user_row
+      on conflict (user_id, usage_date) do nothing
+    )
+    select
+      user_row.id,
+      user_row.device_id,
+      membership_row.product_id,
+      membership_row.expires_at,
+      coalesce(membership_row.plan, 'free') as plan,
+      membership_row.product_id is not null as is_member,
+      coalesce(daily_usage.chat_reply_count, 0) as chat_reply_count,
+      coalesce(daily_usage.tts_count, 0) as tts_count,
+      coalesce(daily_usage.voice_clone_count, 0) as voice_clone_count,
+      coalesce(daily_usage.theater_session_count, 0) as theater_session_count,
+      users.voice_letter_trial_used_at,
+      users.theater_trial_used_at
+    from user_row
+    left join membership_row on true
+    left join daily_usage
+      on daily_usage.user_id = user_row.id
+     and daily_usage.usage_date = current_date
+    left join users on users.id = user_row.id
+    limit 1
+  `;
+
+  return rows[0];
+}
+
 export async function refundTheaterTrial(userId: string) {
   await ensureFeatureTrialsTable();
   await sql`
@@ -170,80 +360,114 @@ export async function refundTheaterTrial(userId: string) {
   `;
 }
 
-export async function assertAndConsumeQuota(userId: string, kind: UsageKind) {
-  const membership = await getMembership(userId);
+export async function assertAndConsumeQuota(
+  userId: string,
+  kind: UsageKind,
+  membershipInput?: Awaited<ReturnType<typeof getMembership>>
+) {
+  const membership = membershipInput ?? await getMembership(userId);
   const limit = limitFor(kind, membership.limits);
-  const col = columnFor(kind);
 
   if (limit <= 0) {
     throw new Error(kind === 'chat' ? 'Daily AI reply quota is not available.' : 'This feature requires membership.');
   }
 
-  await sql`
-    insert into daily_usage (user_id, usage_date)
-    values (${userId}, current_date)
-    on conflict (user_id, usage_date) do nothing
-  `;
-
-  const usage = await getTodayUsage(userId);
-  const current = kind === 'chat'
-    ? usage.chat_reply_count
-    : kind === 'tts'
-      ? usage.tts_count
-      : kind === 'theater_session'
-        ? usage.theater_session_count
-        : usage.voice_clone_count;
-  if (current >= limit) {
+  const current = await incrementUsageCounter(userId, kind, limit);
+  if (current == null) {
     if (kind === 'theater_session') {
       throw new Error('Daily theater session limit exceeded.');
     }
     throw new Error(`Daily quota exceeded for ${kind}.`);
   }
 
-  if (col === 'chat_reply_count') {
-    await sql`update daily_usage set chat_reply_count = chat_reply_count + 1 where user_id = ${userId} and usage_date = current_date`;
-  } else if (col === 'tts_count') {
-    await sql`update daily_usage set tts_count = tts_count + 1 where user_id = ${userId} and usage_date = current_date`;
-  } else if (col === 'theater_session_count') {
-    await sql`update daily_usage set theater_session_count = theater_session_count + 1 where user_id = ${userId} and usage_date = current_date`;
-  } else {
-    await sql`update daily_usage set voice_clone_count = voice_clone_count + 1 where user_id = ${userId} and usage_date = current_date`;
-  }
-
-  return { remaining: Math.max(limit - current - 1, 0), limit };
+  return { remaining: Math.max(limit - current, 0), limit };
 }
 
 export async function refundConsumedQuota(userId: string, kind: UsageKind) {
-  await sql`
-    insert into daily_usage (user_id, usage_date)
-    values (${userId}, current_date)
-    on conflict (user_id, usage_date) do nothing
-  `;
+  await ensureQuotaSchema();
+  switch (kind) {
+    case 'chat':
+      await sql`
+        insert into daily_usage (user_id, usage_date, chat_reply_count)
+        values (${userId}, current_date, 0)
+        on conflict (user_id, usage_date) do update
+        set chat_reply_count = greatest(daily_usage.chat_reply_count - 1, 0)
+      `;
+      break;
+    case 'tts':
+      await sql`
+        insert into daily_usage (user_id, usage_date, tts_count)
+        values (${userId}, current_date, 0)
+        on conflict (user_id, usage_date) do update
+        set tts_count = greatest(daily_usage.tts_count - 1, 0)
+      `;
+      break;
+    case 'theater_session':
+      await sql`
+        insert into daily_usage (user_id, usage_date, theater_session_count)
+        values (${userId}, current_date, 0)
+        on conflict (user_id, usage_date) do update
+        set theater_session_count = greatest(daily_usage.theater_session_count - 1, 0)
+      `;
+      break;
+    case 'voice_clone':
+      await sql`
+        insert into daily_usage (user_id, usage_date, voice_clone_count)
+        values (${userId}, current_date, 0)
+        on conflict (user_id, usage_date) do update
+        set voice_clone_count = greatest(daily_usage.voice_clone_count - 1, 0)
+      `;
+      break;
+  }
+}
 
-  const col = columnFor(kind);
-  if (col === 'chat_reply_count') {
-    await sql`
-      update daily_usage
-      set chat_reply_count = greatest(chat_reply_count - 1, 0)
-      where user_id = ${userId} and usage_date = current_date
-    `;
-  } else if (col === 'tts_count') {
-    await sql`
-      update daily_usage
-      set tts_count = greatest(tts_count - 1, 0)
-      where user_id = ${userId} and usage_date = current_date
-    `;
-  } else if (col === 'theater_session_count') {
-    await sql`
-      update daily_usage
-      set theater_session_count = greatest(theater_session_count - 1, 0)
-      where user_id = ${userId} and usage_date = current_date
-    `;
-  } else {
-    await sql`
-      update daily_usage
-      set voice_clone_count = greatest(voice_clone_count - 1, 0)
-      where user_id = ${userId} and usage_date = current_date
-    `;
+async function incrementUsageCounter(userId: string, kind: UsageKind, limit: number): Promise<number | null> {
+  await ensureQuotaSchema();
+
+  switch (kind) {
+    case 'chat': {
+      const rows = await sql<{ chat_reply_count: number }[]>`
+        insert into daily_usage (user_id, usage_date, chat_reply_count)
+        values (${userId}, current_date, 1)
+        on conflict (user_id, usage_date) do update
+        set chat_reply_count = daily_usage.chat_reply_count + 1
+        where daily_usage.chat_reply_count < ${limit}
+        returning chat_reply_count
+      `;
+      return rows[0]?.chat_reply_count ?? null;
+    }
+    case 'tts': {
+      const rows = await sql<{ tts_count: number }[]>`
+        insert into daily_usage (user_id, usage_date, tts_count)
+        values (${userId}, current_date, 1)
+        on conflict (user_id, usage_date) do update
+        set tts_count = daily_usage.tts_count + 1
+        where daily_usage.tts_count < ${limit}
+        returning tts_count
+      `;
+      return rows[0]?.tts_count ?? null;
+    }
+    case 'theater_session': {
+      const rows = await sql<{ theater_session_count: number }[]>`
+        insert into daily_usage (user_id, usage_date, theater_session_count)
+        values (${userId}, current_date, 1)
+        on conflict (user_id, usage_date) do update
+        set theater_session_count = daily_usage.theater_session_count + 1
+        where daily_usage.theater_session_count < ${limit}
+        returning theater_session_count
+      `;
+      return rows[0]?.theater_session_count ?? null;
+    }
+    case 'voice_clone': {
+      const rows = await sql<{ voice_clone_count: number }[]>`
+        insert into daily_usage (user_id, usage_date, voice_clone_count)
+        values (${userId}, current_date, 1)
+        on conflict (user_id, usage_date) do update
+        set voice_clone_count = daily_usage.voice_clone_count + 1
+        where daily_usage.voice_clone_count < ${limit}
+        returning voice_clone_count
+      `;
+      return rows[0]?.voice_clone_count ?? null;
+    }
   }
 }
