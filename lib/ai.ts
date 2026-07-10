@@ -97,10 +97,11 @@ export async function generateChatReply(params: {
 }) {
   const baseURL = requiredEnv('AI_API_BASE_URL').replace(/\/$/, '');
   const apiKey = requiredEnv('AI_API_KEY');
-  const chatModel = optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', 'qwen-flash'));
-  const theaterModel = optionalEnv('AI_TEXT_MODEL_THEATER', optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', 'qwen-flash')));
+  const defaultTextModel = 'deepseek-v4-flash';
+  const chatModel = optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', defaultTextModel));
+  const theaterModel = optionalEnv('AI_TEXT_MODEL_THEATER', optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', defaultTextModel)));
   const theaterStageBeatModel = optionalEnv('AI_TEXT_MODEL_THEATER_STAGE_BEAT', theaterModel);
-  const voiceLetterModel = optionalEnv('AI_TEXT_MODEL_VOICE_LETTER', optionalEnv('AI_TEXT_MODEL_STRONG', 'qwen-plus'));
+  const voiceLetterModel = optionalEnv('AI_TEXT_MODEL_VOICE_LETTER', optionalEnv('AI_TEXT_MODEL_STRONG', defaultTextModel));
   const mode = params.mode ?? 'chat';
   const model = mode === 'voice_letter'
     ? voiceLetterModel
@@ -296,11 +297,17 @@ async function ensureReplyCompleteness(
       nativeLanguageCode
     );
     if (validNotes.length < 2 && result.reply.trim()) {
-      const generic = genericVocabularyNotes(result.reply, targetLanguageCode, nativeLanguageCode);
-      if (generic.length > 0) {
-        result.vocabulary_notes = generic.length >= validNotes.length ? generic : validNotes;
+      const repairedNotes = await repairVocabularyNotes(
+        result.reply,
+        ctx,
+        nativeLanguageCode,
+        targetLanguageCode
+      ).catch(() => []);
+      if (repairedNotes.length > 0) {
+        result.vocabulary_notes = repairedNotes.length >= validNotes.length ? repairedNotes : validNotes;
       } else {
-        result.vocabulary_notes = validNotes;
+        const generic = genericVocabularyNotes(result.reply, targetLanguageCode, nativeLanguageCode);
+        result.vocabulary_notes = generic.length > 0 ? (generic.length >= validNotes.length ? generic : validNotes) : validNotes;
       }
     } else {
       result.vocabulary_notes = validNotes;
@@ -580,23 +587,9 @@ Special mode: theater stage beat
 `
     : '';
 
-  const realPersonName = realName.trim();
-  const realPersonGroup = groupName.trim();
-  const realPersonInstructions = isRealPerson
-    ? `
+  const realPersonInstructions = '';
 
-Real-person context (highest-priority identity anchor):
-- Real name: ${realPersonName || 'N/A'}
-- Group / team / circle: ${realPersonGroup || 'N/A'}
-- Use this context to shape identity, stage presence, social tone, and recurring daily life details.
-- Treat this as the strongest style reference whenever it conflicts with the generic persona.
-- Priority order: real-person context > persona > recent chat context > generic fallback style.
-- Never claim the AI is literally the real person; remain a fictional chat simulation inspired by the provided identity.
-- Keep the real-person anchor active throughout the conversation and draw from it whenever it improves the reply.
-`
-    : '';
-
-  return `You are generating a reply for an idol-style private chat simulation.
+  return `You are generating a reply for an idol-style fictional language-learning conversation.
 
 Character nickname (display only): ${nickname}
 
@@ -621,7 +614,7 @@ Field separation (critical — do not mix languages across fields):
 - Normal chat: always include "translation_zh" and 2-3 short "vocabulary_notes".
 ${mode === 'voice_letter'
     ? '- "vocabulary_notes" = 语音信模式必须输出空数组 []。'
-    : '- "vocabulary_notes" = 单词/短句注解：2–3 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 用 ${nativeLanguage} 书写。'}
+    : '- "vocabulary_notes" = 单词/短句注解：2–3 条；term 必须是 reply 中出现的词或短短语，禁止整句；explanation_zh 必须写成这个词/短语最常见的字典义，不要写成这句话里的语境义。'}
 - When the user level is ${languageLevel}, choose vocabulary that feels appropriate for that level. For near-native or native users, prefer less obvious and more advanced expressions; avoid listing extremely simple words.
 
 Output rules:
@@ -642,11 +635,11 @@ Do not shorten "reply". Do not add vocabulary notes.`
     : ` Return one JSON object only. No markdown.
 Schema:
 {
-  "reply": "韩文原文",
+  "reply": "尽量简洁的 ${targetLanguage} 原文",
   "translation_zh": "翻译",
   "romanization": "latin romanization",
   "vocabulary_notes": [
-    {"term":"目标语言词","romanization":"latin","explanation_zh":"释义"}
+    {"term":"目标语言词","romanization":"latin","explanation_zh":"根据当前回复语境给出的释义"}
   ]
 }`}`;
 }
@@ -1170,7 +1163,7 @@ async function repairVocabularyNotes(
       {
         role: 'system',
         content:
-          `Pick exactly 3 to 5 SHORT learning items from the target-language reply. Each term must be a single word, particle, ending, or short phrase copied verbatim from the message. Do NOT use the full sentence as a term. Return JSON only: {"vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. explanation_zh must be written in ${nativeLanguage}. If a term can be pronounced with a useful Latin transliteration, include romanization; otherwise leave it empty. Target language: ${targetLanguage}.`
+          `Pick exactly 3 to 5 SHORT learning items from the target-language reply. Each term must be a single word, particle, ending, or short phrase copied verbatim from the message. Do NOT use the full sentence as a term. Return JSON only: {"vocabulary_notes":[{"term":"","romanization":"","explanation_zh":""}]}. explanation_zh must be written in ${nativeLanguage} and should give the most common dictionary meaning of the term or phrase, not the sentence-specific nuance. If a term has multiple senses, prefer the most common standalone meaning. If a term can be pronounced with a useful Latin transliteration, include romanization; otherwise leave it empty. Target language: ${targetLanguage}.`
       },
       { role: 'user', content: reply }
     ],
@@ -1446,12 +1439,12 @@ function genericVocabularyExplanation(
     default:
       if ((targetLanguageCode || '').toLowerCase() === 'ko') {
         return isShortPhrase
-          ? '대화에서 자주 쓰는 표현이에요.'
-          : '대화에서 자주 쓰는 단어예요.';
+          ? '常见短语义，按字典常用义记。'
+          : '常见单词义，按字典常用义记。';
       }
       return isShortPhrase
-        ? '常用短语，适合整体记忆。'
-        : '常用单词，适合先单独记住。';
+        ? '常见短语义，按字典常用义记。'
+        : '常见单词义，按字典常用义记。';
   }
 }
 
