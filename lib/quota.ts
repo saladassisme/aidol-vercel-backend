@@ -43,7 +43,8 @@ function ensureQuotaSchema() {
       `;
       await sql`
         alter table users
-        add column if not exists tts_preview_used_at timestamptz
+        add column if not exists tts_preview_used_at timestamptz,
+        add column if not exists tts_preview_count int not null default 0
       `;
       await sql`
         alter table users
@@ -117,22 +118,23 @@ async function ensureFeatureTrialsTable() {
 
 export async function hasUsedFreeTTSPreview(userId: string) {
   await ensureTTSPreviewTrialsTable();
-  const rows = await sql<{ tts_preview_used_at: Date | null }[]>`
-    select tts_preview_used_at
+  const rows = await sql<{ tts_preview_count: number }[]>`
+    select tts_preview_count
     from users
     where id = ${userId}
     limit 1
   `;
-  return Boolean(rows[0]?.tts_preview_used_at);
+  return (rows[0]?.tts_preview_count ?? 0) >= 3;
 }
 
 export async function claimFreeTTSPreview(userId: string) {
   await ensureTTSPreviewTrialsTable();
   const rows = await sql<{ id: string }[]>`
     update users
-    set tts_preview_used_at = coalesce(tts_preview_used_at, now())
+    set tts_preview_count = tts_preview_count + 1,
+        tts_preview_used_at = coalesce(tts_preview_used_at, now())
     where id = ${userId}
-      and tts_preview_used_at is null
+      and tts_preview_count < 3
     returning id
   `;
   return Boolean(rows[0]);
@@ -142,7 +144,11 @@ export async function refundFreeTTSPreview(userId: string) {
   await ensureTTSPreviewTrialsTable();
   await sql`
     update users
-    set tts_preview_used_at = null
+    set tts_preview_count = greatest(tts_preview_count - 1, 0),
+        tts_preview_used_at = case
+          when tts_preview_count <= 1 then null
+          else tts_preview_used_at
+        end
     where id = ${userId}
   `;
 }

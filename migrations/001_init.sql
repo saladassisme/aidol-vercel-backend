@@ -2,6 +2,7 @@ create table if not exists users (
   id uuid primary key,
   device_id text unique not null,
   tts_preview_used_at timestamptz,
+  tts_preview_count int not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

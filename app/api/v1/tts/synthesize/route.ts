@@ -84,16 +84,21 @@ export async function POST(request: Request) {
     if (cached[0]) {
       let audioBase64 = cached[0].audio_base64;
       if (!audioBase64) {
-        const downloaded = await downloadDashScopeAudio(cached[0].audio_url);
-        audioBase64 = downloaded.audioBase64;
-        await sql`
-          update tts_cache
-          set audio_base64 = ${audioBase64}
-          where user_id = ${auth.userId}
-            and voice_id = ${body.voiceId}
-            and model = ${model}
-            and text_hash = ${textHash}
-        `;
+        try {
+          const downloaded = await downloadDashScopeAudio(cached[0].audio_url);
+          audioBase64 = downloaded.audioBase64;
+          await sql`
+            update tts_cache
+            set audio_base64 = ${audioBase64}
+            where user_id = ${auth.userId}
+              and voice_id = ${body.voiceId}
+              and model = ${model}
+              and text_hash = ${textHash}
+          `;
+        } catch (downloadError) {
+          console.warn('[tts.synthesize] cached audio download failed, returning audioUrl only', downloadError);
+          return ok({ audioUrl: cached[0].audio_url, audioBase64: null, cached: true, downloadFailed: true });
+        }
       }
       return ok({ audioUrl: cached[0].audio_url, audioBase64, cached: true });
     }
@@ -110,17 +115,23 @@ export async function POST(request: Request) {
     }
 
     const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: body.voiceId, model, languageType, region: clientRegion });
-    const downloaded = await downloadDashScopeAudio(synthesized.audioURL);
+    let audioBase64: string | null = null;
+    try {
+      const downloaded = await downloadDashScopeAudio(synthesized.audioURL);
+      audioBase64 = downloaded.audioBase64;
+    } catch (downloadError) {
+      console.warn('[tts.synthesize] audio download failed, returning audioUrl only', downloadError);
+    }
 
     await sql`
       insert into tts_cache (id, user_id, voice_id, model, text_hash, audio_url, audio_base64)
-      values (${crypto.randomUUID()}, ${auth.userId}, ${body.voiceId}, ${model}, ${textHash}, ${synthesized.audioURL}, ${downloaded.audioBase64})
+      values (${crypto.randomUUID()}, ${auth.userId}, ${body.voiceId}, ${model}, ${textHash}, ${synthesized.audioURL}, ${audioBase64})
       on conflict (user_id, voice_id, model, text_hash) do update set
         audio_url = excluded.audio_url,
         audio_base64 = excluded.audio_base64
     `;
 
-    return ok({ audioUrl: synthesized.audioURL, audioBase64: downloaded.audioBase64, cached: false });
+    return ok({ audioUrl: synthesized.audioURL, audioBase64, cached: false, downloadFailed: audioBase64 === null });
   } catch (error) {
     if (consumedQuota && userId) {
       try {
