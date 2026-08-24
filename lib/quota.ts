@@ -29,7 +29,10 @@ function chatReplyLimit(isMember: boolean) {
 let quotaSchemaReady: Promise<void> | null = null;
 
 function ensureQuotaSchema() {
-  if (process.env.NODE_ENV === 'production') {
+  // Schema changes must not run inside user requests. They can lock quota
+  // tables and block the atomic usage update. Run migrations explicitly, or
+  // opt in for local setup with AIDOL_AUTO_MIGRATE=true.
+  if (process.env.NODE_ENV === 'production' || process.env.AIDOL_AUTO_MIGRATE !== 'true') {
     return Promise.resolve();
   }
   if (!quotaSchemaReady) {

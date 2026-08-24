@@ -13,13 +13,15 @@ export async function cloneVoiceWithDashScope(params: {
   audioData: Buffer;
   mimeType: string;
   preferredName: string;
+  region?: 'mainland' | 'overseas';
 }) {
-  const apiKey = requiredEnv('DASHSCOPE_API_KEY');
+  const region = params.region === 'mainland' ? 'mainland' : 'overseas';
+  const apiKey = requiredEnv(`DASHSCOPE_API_KEY_${region.toUpperCase()}`);
   const targetModel = optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
   const base64 = params.audioData.toString('base64');
   const dataURI = `data:${params.mimeType || 'audio/wav'};base64,${base64}`;
 
-  const response = await dashscopeFetch(`${dashscopeEndpointBase()}/api/v1/services/audio/tts/customization`, {
+  const response = await dashscopeFetch(`${dashscopeEndpointBase(region)}/api/v1/services/audio/tts/customization`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -49,12 +51,14 @@ export async function synthesizeWithDashScope(params: {
   voiceId: string;
   model?: string;
   languageType?: string;
+  region?: 'mainland' | 'overseas';
 }) {
-  const apiKey = requiredEnv('DASHSCOPE_API_KEY');
+  const region = params.region === 'mainland' ? 'mainland' : 'overseas';
+  const apiKey = requiredEnv(`DASHSCOPE_API_KEY_${region.toUpperCase()}`);
   const model = params.model || optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
   const languageType = params.languageType || 'Korean';
 
-  const response = await dashscopeFetch(`${dashscopeEndpointBase()}/api/v1/services/aigc/multimodal-generation/generation`, {
+  const response = await dashscopeFetch(`${dashscopeEndpointBase(region)}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,

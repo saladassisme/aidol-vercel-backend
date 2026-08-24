@@ -32,14 +32,18 @@ export async function POST(request: Request) {
     if (file.size > 10 * 1024 * 1024) return fail('audio file must be <= 10MB.', 400, 'AUDIO_TOO_LARGE');
 
     const preferredName = String(form.get('preferredName') || 'aidol_voice');
+    const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
+      ? 'mainland'
+      : 'overseas';
     console.log(`[voice.clone] ${requestId} received file name=${file.name || 'unknown'} type=${file.type || 'unknown'} size=${file.size} preferredName=${preferredName}`);
     const arrayBuffer = await file.arrayBuffer();
 
-    console.log(`[voice.clone] ${requestId} dashscope clone start endpoint=${dashscopeEndpointBase()}`);
+    console.log(`[voice.clone] ${requestId} dashscope clone start region=${clientRegion} endpoint=${dashscopeEndpointBase(clientRegion)}`);
     const cloned = await cloneVoiceWithDashScope({
       audioData: Buffer.from(arrayBuffer),
       mimeType: file.type || 'audio/wav',
-      preferredName
+      preferredName,
+      region: clientRegion
     });
     console.log(`[voice.clone] ${requestId} dashscope clone success voiceId=${cloned.voiceId}`);
 

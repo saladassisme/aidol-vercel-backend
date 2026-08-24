@@ -23,34 +23,30 @@ function isDirectSupabaseURL(url: string) {
 
 /**
  * Pick the best Postgres URL for Vercel serverless.
- * Prefer Supabase Transaction pooler (6543) over manual direct db.*:5432 URLs.
+ * Prefer an explicit DATABASE_URL, then fall back to the integration-provided POSTGRES_URL.
  */
 function pickDatabaseURL(): string {
-  const candidates = [
-    optionalEnv('POSTGRES_URL'),
-    optionalEnv('DATABASE_URL'),
-    optionalEnv('POSTGRES_PRISMA_URL')
-  ].filter((value) => value.length > 0);
-
-  const pooler = candidates.find(isPoolerURL);
-  if (pooler) return pooler;
-
-  if (process.env.VERCEL) {
-    const direct = candidates.find(isDirectSupabaseURL);
-    if (direct) {
+  const explicitDatabaseURL = optionalEnv('DATABASE_URL');
+  if (explicitDatabaseURL) {
+    if (process.env.VERCEL && isDirectSupabaseURL(explicitDatabaseURL)) {
       throw new Error(
-        'DATABASE_URL/POSTGRES_URL uses Supabase direct (db.*.supabase.co:5432). ' +
-          'In Vercel → Environment Variables, set DATABASE_URL to Supabase Connect → URI → Transaction (port 6543, pooler host). ' +
-          'Or delete manual DATABASE_URL and use the pooled POSTGRES_URL from the Supabase integration.'
+        'DATABASE_URL uses Supabase direct (db.*.supabase.co:5432). ' +
+          'In Vercel → Environment Variables, set DATABASE_URL to Supabase Connect → URI → Transaction (port 6543, pooler host).'
       );
     }
+
+    const legacyPostgresURL = optionalEnv('POSTGRES_URL');
+    if (legacyPostgresURL && legacyPostgresURL !== explicitDatabaseURL) {
+      console.warn('[aidol] DATABASE_URL is set; ignoring POSTGRES_URL.');
+    }
+
+    return explicitDatabaseURL;
   }
 
-  const fallback = candidates[0];
-  if (!fallback) {
-    throw new Error('Missing DATABASE_URL or POSTGRES_URL.');
-  }
-  return fallback;
+  const poolerUrl = optionalEnv('POSTGRES_URL') || optionalEnv('POSTGRES_PRISMA_URL');
+  if (poolerUrl) return poolerUrl;
+
+  throw new Error('Missing DATABASE_URL or POSTGRES_URL.');
 }
 
 export const databaseURL = pickDatabaseURL();

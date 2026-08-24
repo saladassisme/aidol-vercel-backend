@@ -61,6 +61,9 @@ export async function POST(request: Request) {
     userId = auth.userId;
 
     const body = BodySchema.parse(await request.json());
+    const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
+      ? 'mainland'
+      : 'overseas';
     const trialContext = request.headers.get('x-aidol-trial') || '';
     const isOnboardingTrial = trialContext === 'onboarding';
     const isTrial = Boolean(trialContext);
@@ -106,7 +109,7 @@ export async function POST(request: Request) {
       consumedQuota = true;
     }
 
-    const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: body.voiceId, model, languageType });
+    const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: body.voiceId, model, languageType, region: clientRegion });
     const downloaded = await downloadDashScopeAudio(synthesized.audioURL);
 
     await sql`

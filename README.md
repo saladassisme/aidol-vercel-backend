@@ -31,7 +31,7 @@ The profile count is usually enforced in the app UI. The backend enforces AI/TTS
 
 1. Create a Vercel project.
 2. Connect **Supabase** Postgres.
-3. Set `DATABASE_URL` to Supabase **Transaction pooler** URI (port **6543**, not the direct `db.*.supabase.co:5432` URI). In Supabase: **Connect → ORMs → URI → Mode: Transaction**.
+3. Set `DATABASE_URL` to the Supabase **Transaction pooler** URI (port **6543**, not the direct `db.*.supabase.co:5432` URI). In Supabase: **Connect → ORMs → URI → Mode: Transaction**. If `DATABASE_URL` and `POSTGRES_URL` are both set, the backend now prefers `DATABASE_URL`.
 4. Add the environment variables from `.env.example`.
 4. Run the SQL in `migrations/001_init.sql` against your database.
 5. Run `migrations/002_subscription_unique.sql` after `001_init.sql` (required for Apple subscription upsert).
@@ -55,7 +55,7 @@ See `.env.example`. The backend accepts **either** the names below or their lega
 
 | You configure (recommended) | Code alias (also accepted) |
 |---|---|
-| `DATABASE_URL` | `POSTGRES_URL` |
+| `DATABASE_URL` | primary; `POSTGRES_URL` is a legacy fallback |
 | `LLM_API_BASE_URL` | `AI_API_BASE_URL` |
 | `LLM_API_KEY` | `AI_API_KEY` |
 | `LLM_MODEL` | `AI_TEXT_MODEL` |

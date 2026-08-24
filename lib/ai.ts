@@ -13,6 +13,32 @@ export type ChatReplyPayload = {
   }>;
 };
 
+export function safeFallbackReply(
+  targetLanguageCode?: string,
+  nativeLanguageCode?: string,
+  mode: 'chat' | 'voice_letter' | 'teacher' | 'theater_stage_beat' | 'theater' = 'chat'
+): ChatReplyPayload {
+  const target = (mode === 'theater_stage_beat' ? nativeLanguageCode || '' : targetLanguageCode || '').toLowerCase();
+  const fallbackByLanguage: Record<string, string> = {
+    en: 'Could you say that one more time? I want to make sure I understood you.',
+    ko: '네, 한 번만 더 천천히 말씀해 주세요.',
+    ja: '네、もう一度ゆっくり言ってもらえますか？',
+    zh: '好的，请再说一次，我想确认一下自己理解得对不对。',
+    'zh-hans': '好的，请再说一次，我想确认一下自己理解得对不对。',
+    'zh-hant': '好的，請再說一次，我想確認一下自己理解得對不對。',
+    es: '¿Puedes decirlo una vez más? Quiero asegurarme de haberte entendido.',
+    fr: 'Pouvez-vous le dire encore une fois ? Je veux être sûr de bien vous comprendre.',
+    de: 'Kannst du das bitte noch einmal sagen? Ich möchte sicher sein, dass ich dich richtig verstanden habe.',
+    it: 'Puoi dirlo un’altra volta? Voglio essere sicuro di averti capito.',
+    pt: 'Pode dizer mais uma vez? Quero ter certeza de que entendi você.',
+    ru: 'Можешь сказать ещё раз? Я хочу убедиться, что правильно тебя понял.',
+    id: 'Bisa kamu ulangi sekali lagi? Aku ingin memastikan bahwa aku memahamimu dengan benar.',
+    th: 'พูดอีกครั้งได้ไหม ฉันอยากแน่ใจว่าเข้าใจคุณถูกต้อง'
+  };
+  const reply = fallbackByLanguage[target] || fallbackByLanguage.en;
+  return { reply, translation_zh: '', romanization: '', vocabulary_notes: [] };
+}
+
 function voiceLetterMinReplyLength(targetLanguageCode?: string): number {
   switch ((targetLanguageCode || '').toLowerCase()) {
     case 'ko':
@@ -89,19 +115,23 @@ export async function generateChatReply(params: {
   nativeLanguageCode?: string;
   targetLanguageCode?: string;
   languageLevelCode?: string;
+  region?: 'mainland' | 'overseas';
   studyVocabularyEntries?: Array<{
     term: string;
     explanation: string;
     romanization?: string;
   }>;
 }) {
-  const baseURL = requiredEnv('AI_API_BASE_URL').replace(/\/$/, '');
-  const apiKey = requiredEnv('AI_API_KEY');
+  const region = params.region === 'mainland' ? 'mainland' : 'overseas';
+  const regionModel = optionalEnv(`LLM_MODEL_${region.toUpperCase()}`);
+  const baseURL = requiredEnv(`LLM_API_BASE_URL_${region.toUpperCase()}`).replace(/\/$/, '');
+  const apiKey = requiredEnv(`LLM_API_KEY_${region.toUpperCase()}`);
   const defaultTextModel = 'deepseek-v4-flash';
-  const chatModel = optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', defaultTextModel));
-  const theaterModel = optionalEnv('AI_TEXT_MODEL_THEATER', optionalEnv('AI_TEXT_MODEL_CHAT', optionalEnv('AI_TEXT_MODEL', defaultTextModel)));
-  const theaterStageBeatModel = optionalEnv('AI_TEXT_MODEL_THEATER_STAGE_BEAT', theaterModel);
-  const voiceLetterModel = optionalEnv('AI_TEXT_MODEL_VOICE_LETTER', optionalEnv('AI_TEXT_MODEL_STRONG', defaultTextModel));
+  const fallbackTextModel = regionModel || optionalEnv('AI_TEXT_MODEL', defaultTextModel);
+  const chatModel = optionalEnv(`AI_TEXT_MODEL_CHAT_${region.toUpperCase()}`, regionModel || optionalEnv('AI_TEXT_MODEL_CHAT', fallbackTextModel));
+  const theaterModel = optionalEnv(`AI_TEXT_MODEL_THEATER_${region.toUpperCase()}`, regionModel || optionalEnv('AI_TEXT_MODEL_THEATER', chatModel));
+  const theaterStageBeatModel = optionalEnv(`AI_TEXT_MODEL_THEATER_STAGE_BEAT_${region.toUpperCase()}`, regionModel || optionalEnv('AI_TEXT_MODEL_THEATER_STAGE_BEAT', theaterModel));
+  const voiceLetterModel = optionalEnv(`AI_TEXT_MODEL_VOICE_LETTER_${region.toUpperCase()}`, regionModel || optionalEnv('AI_TEXT_MODEL_VOICE_LETTER', optionalEnv('AI_TEXT_MODEL_STRONG', fallbackTextModel)));
   const mode = params.mode ?? 'chat';
   const model = mode === 'voice_letter'
     ? voiceLetterModel
@@ -306,8 +336,8 @@ async function ensureReplyCompleteness(
       if (repairedNotes.length > 0) {
         result.vocabulary_notes = repairedNotes.length >= validNotes.length ? repairedNotes : validNotes;
       } else {
-        const generic = genericVocabularyNotes(result.reply, targetLanguageCode, nativeLanguageCode);
-        result.vocabulary_notes = generic.length > 0 ? (generic.length >= validNotes.length ? generic : validNotes) : validNotes;
+        // Do not display guessed placeholder meanings as dictionary definitions.
+        result.vocabulary_notes = validNotes;
       }
     } else {
       result.vocabulary_notes = validNotes;
@@ -350,18 +380,37 @@ function extractReplyText(text: string, targetLanguageCode?: string) {
 }
 
 function extractTextField(text: string, languageCode?: string) {
-  const lines = text
+  const cleanedText = sanitizeModelTextField(text);
+  const lines = cleanedText
     .split(/\r?\n/)
     .map((line) => stripKnownPrefix(line.trim()))
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => line && !looksLikeModelReasoning(line));
 
-  if (!lines.length) return text.trim();
+  if (!lines.length) return cleanedText.trim();
 
   const preferred = lines.filter((line) => languageScore(line, languageCode) > 0.12);
   if (preferred.length) return preferred.join('\n').trim();
 
   return lines.join('\n').trim();
+}
+
+/** Prevent provider-side JSON/schema leakage from reaching the client. */
+function sanitizeModelTextField(text: string) {
+  let result = stripMarkdownCodeFence(String(text ?? '')).trim();
+  if (!result) return '';
+
+  const embeddedJson = result.search(
+    /(?:\{\s*["']?(?:term|word|phrase|romanization|translation_zh|explanation_zh|vocabulary_notes|reply)["']?\s*:|,\s*["']?(?:term|word|phrase|romanization|translation_zh|explanation_zh|vocabulary_notes)["']?\s*:)/i
+  );
+  if (embeddedJson === 0) return '';
+  if (embeddedJson > 0) result = result.slice(0, embeddedJson).trim();
+
+  return result
+    .replace(/^[,;\s]*(?:["'}\]]\s*)+/, '')
+    .replace(/(?:["'}\]]\s*)+[,;]?\s*$/, '')
+    .replace(/\s+(?:reply|translation_zh|translation|romanization|vocabulary_notes)\s*[:=].*$/is, '')
+    .trim();
 }
 
 function buildDraftRepairPrompt(
@@ -940,6 +989,11 @@ async function fetchChatCompletionContent(params: ChatCompletionParams): Promise
       max_tokens: params.maxTokens ?? 900,
       messages: params.messages
     };
+    // Thinking models can spend the whole small chat budget on reasoning and
+    // return an empty assistant content field. The app only needs the answer.
+    if (/^deepseek/i.test(params.model)) {
+      body.thinking = { type: 'disabled' };
+    }
     if (useJsonMode) body.response_format = { type: 'json_object' };
 
     const response = await fetch(`${params.baseURL}/chat/completions`, {
@@ -958,25 +1012,48 @@ async function fetchChatCompletionContent(params: ChatCompletionParams): Promise
   const attempts: boolean[] = params.preferJsonMode ? [true, false] : [false, true];
 
   let lastEmptyDetail = 'unknown';
-  for (const useJsonMode of attempts) {
-    let { response, text } = await attempt(useJsonMode);
+  for (let retry = 0; retry < 2; retry += 1) {
+    for (const useJsonMode of attempts) {
+      let responseResult: Awaited<ReturnType<typeof attempt>>;
+      try {
+        responseResult = await attempt(useJsonMode);
+      } catch (error) {
+        if (retry === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        throw error;
+      }
+      const { response, text } = responseResult;
 
-    if (!response.ok && useJsonMode && shouldRetryWithoutJsonMode(response.status, text)) {
-      continue;
+      if (!response.ok && useJsonMode && shouldRetryWithoutJsonMode(response.status, text)) {
+        continue;
+      }
+      if (!response.ok) {
+        const retryable = response.status === 408 || response.status === 409 || response.status === 429 || response.status >= 500;
+        if (retryable && retry === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          continue;
+        }
+        throw new Error(`AI provider failed: HTTP ${response.status} ${text}`);
+      }
+
+      let envelope: unknown;
+      try {
+        envelope = JSON.parse(text);
+      } catch {
+        if (retry === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        throw new Error(`AI provider returned invalid envelope: ${text.slice(0, 200)}`);
+      }
+
+      const content = extractAssistantContent(envelope);
+      if (content) return content;
+
+      lastEmptyDetail = describeEmptyCompletion(envelope);
     }
-    if (!response.ok) throw new Error(`AI provider failed: HTTP ${response.status} ${text}`);
-
-    let envelope: unknown;
-    try {
-      envelope = JSON.parse(text);
-    } catch {
-      throw new Error(`AI provider returned invalid envelope: ${text.slice(0, 200)}`);
-    }
-
-    const content = extractAssistantContent(envelope);
-    if (content) return content;
-
-    lastEmptyDetail = describeEmptyCompletion(envelope);
   }
 
   console.warn(`AI empty content (${lastEmptyDetail})`);
@@ -1039,6 +1116,10 @@ function extractContentValue(content: unknown): string {
     if (!part || typeof part !== 'object') continue;
     const item = part as Record<string, unknown>;
     if (typeof item.text === 'string') parts.push(item.text);
+    else if (item.text && typeof item.text === 'object') {
+      const text = (item.text as Record<string, unknown>).value;
+      if (typeof text === 'string') parts.push(text);
+    }
     else if (typeof item.content === 'string') parts.push(item.content);
   }
   return parts.join('\n').trim();
@@ -1237,6 +1318,10 @@ function sanitizeVocabularyNotes(
   for (const item of raw) {
     if (typeof item === 'string') {
       const parsed = parseNoteLine(item);
+      if (parsed) {
+        parsed.term = sanitizeModelTextField(parsed.term);
+        parsed.explanation_zh = sanitizeModelTextField(parsed.explanation_zh);
+      }
       if (
         parsed &&
         !seen.has(parsed.term) &&
@@ -1250,10 +1335,10 @@ function sanitizeVocabularyNotes(
     }
     if (!item || typeof item !== 'object') continue;
     const obj = item as Record<string, unknown>;
-    const term = pickString(obj, ['term', 'word', 'phrase', 'korean', 'text']) ?? '';
+    const term = sanitizeModelTextField(pickString(obj, ['term', 'word', 'phrase', 'korean', 'text']) ?? '');
     const explanation_zh =
       pickString(obj, ['explanation_zh', 'explanation', 'meaning', 'meaning_zh', 'zh', 'note', 'usage']) ?? '';
-    const romanization = pickString(obj, ['romanization', 'romaja', 'pronunciation', 'reading', 'latin']) ?? '';
+    const romanization = sanitizeModelTextField(pickString(obj, ['romanization', 'romaja', 'pronunciation', 'reading', 'latin']) ?? '');
     const cleanedExplanation = extractTextField(explanation_zh, nativeLanguageCode);
     if (!term || !cleanedExplanation || seen.has(term)) continue;
     if (!isValidVocabularyTerm(term, fullReply, targetLanguageCode)) continue;
@@ -1525,6 +1610,7 @@ function looksLikeModelReasoning(text: string) {
 }
 
 function sanitizeRomanization(text: string) {
+  text = sanitizeModelTextField(text);
   if (looksLikeModelReasoning(text)) return '';
 
   return text
