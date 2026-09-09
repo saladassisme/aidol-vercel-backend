@@ -77,7 +77,6 @@ export async function POST(request: Request) {
         select voice_id
         from persona_catalog_configs
         where persona_key = ${body.personaKey}
-          and is_enabled = true
         limit 1
       `;
       resolvedVoiceId = presetVoices[0]?.voice_id?.trim() || undefined;

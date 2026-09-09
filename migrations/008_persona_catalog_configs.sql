@@ -9,9 +9,14 @@ create table if not exists persona_catalog_configs (
   target_languages jsonb not null default '[]'::jsonb,
   avatar_path text,
   voice_id text,
+  source_version text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Allows an already-created v3 table to be upgraded in place.
+alter table persona_catalog_configs
+  add column if not exists source_version text not null default '';
 
 create index if not exists persona_catalog_configs_display_order_idx
   on persona_catalog_configs (display_order asc, persona_key asc);
