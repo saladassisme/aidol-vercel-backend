@@ -11,9 +11,12 @@ export const runtime = 'nodejs';
 
 const BodySchema = z.object({
   text: z.string().min(1).max(1000),
-  voiceId: z.string().min(1),
+  voiceId: z.string().min(1).optional(),
+  personaKey: z.string().min(1).optional(),
   model: z.string().optional(),
   languageType: z.string().optional()
+}).refine((body) => Boolean(body.voiceId || body.personaKey), {
+  message: 'voiceId or personaKey is required.'
 });
 
 function formatTTSError(error: unknown) {
@@ -68,14 +71,33 @@ export async function POST(request: Request) {
     const isOnboardingTrial = trialContext === 'onboarding';
     const isTrial = Boolean(trialContext);
 
+    let resolvedVoiceId = body.voiceId;
+    if (body.personaKey) {
+      const presetVoices = await sql<{ voice_id: string | null }[]>`
+        select voice_id
+        from persona_catalog_configs
+        where persona_key = ${body.personaKey}
+          and is_enabled = true
+        limit 1
+      `;
+      resolvedVoiceId = presetVoices[0]?.voice_id?.trim() || undefined;
+      if (!resolvedVoiceId) {
+        return fail('This Aidol does not have a voice configured yet.', 409, 'PERSONA_VOICE_NOT_CONFIGURED');
+      }
+    }
+
+    if (!resolvedVoiceId) {
+      return fail('A voice could not be resolved.', 400, 'VOICE_REQUIRED');
+    }
+
     const model = body.model || process.env.DASHSCOPE_TTS_VC_MODEL || 'qwen3-tts-vc-2026-01-22';
     const languageType = body.languageType || 'Korean';
-    const textHash = await sha256Hex(`${body.voiceId}\n${model}\n${languageType}\n${body.text}`);
+    const textHash = await sha256Hex(`${resolvedVoiceId}\n${model}\n${languageType}\n${body.text}`);
 
     const cached = await sql<{ audio_url: string; audio_base64: string | null }[]>`
       select audio_url, audio_base64 from tts_cache
       where user_id = ${auth.userId}
-        and voice_id = ${body.voiceId}
+        and voice_id = ${resolvedVoiceId}
         and model = ${model}
         and text_hash = ${textHash}
       limit 1
@@ -91,7 +113,7 @@ export async function POST(request: Request) {
             update tts_cache
             set audio_base64 = ${audioBase64}
             where user_id = ${auth.userId}
-              and voice_id = ${body.voiceId}
+              and voice_id = ${resolvedVoiceId}
               and model = ${model}
               and text_hash = ${textHash}
           `;
@@ -114,7 +136,7 @@ export async function POST(request: Request) {
       consumedQuota = true;
     }
 
-    const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: body.voiceId, model, languageType, region: clientRegion });
+    const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: resolvedVoiceId, model, languageType, region: clientRegion });
     let audioBase64: string | null = null;
     try {
       const downloaded = await downloadDashScopeAudio(synthesized.audioURL);
@@ -125,7 +147,7 @@ export async function POST(request: Request) {
 
     await sql`
       insert into tts_cache (id, user_id, voice_id, model, text_hash, audio_url, audio_base64)
-      values (${crypto.randomUUID()}, ${auth.userId}, ${body.voiceId}, ${model}, ${textHash}, ${synthesized.audioURL}, ${audioBase64})
+      values (${crypto.randomUUID()}, ${auth.userId}, ${resolvedVoiceId}, ${model}, ${textHash}, ${synthesized.audioURL}, ${audioBase64})
       on conflict (user_id, voice_id, model, text_hash) do update set
         audio_url = excluded.audio_url,
         audio_base64 = excluded.audio_base64

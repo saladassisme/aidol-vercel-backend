@@ -18,6 +18,7 @@ import {
 } from '@/lib/db';
 import { generateChatReply, safeFallbackReply } from '@/lib/ai';
 import { logIncomingRequest } from '@/lib/request-log';
+import { resolvePersonaCatalogPrompt } from '@/lib/persona-catalog';
 
 export const runtime = 'nodejs';
 
@@ -33,6 +34,7 @@ const BodySchema = z.object({
   profileId: z.string().optional(),
   nickname: z.string().default('Aidol'),
   persona: z.string().min(1),
+  personaPresetKey: z.string().trim().min(1).optional(),
   isRealPerson: z.boolean().default(false),
   realName: z.string().default(''),
   groupName: z.string().default(''),
@@ -195,12 +197,33 @@ export async function POST(request: Request) {
     }
 
     try {
+      let resolvedPersona = body.persona;
+      let resolvedGroupName = body.groupName;
+      let isCatalogPersona = false;
+      if (body.personaPresetKey) {
+        try {
+          const catalogPersona = await resolvePersonaCatalogPrompt(body.personaPresetKey);
+          if (catalogPersona) {
+            resolvedPersona = catalogPersona.persona;
+            resolvedGroupName = catalogPersona.group;
+            isCatalogPersona = true;
+          }
+        } catch (error) {
+          console.warn('[aidol] chat.reply persona catalog fallback', {
+            requestId,
+            personaKey: body.personaPresetKey,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
       const reply = await generateChatReply({
         nickname: body.nickname,
-        persona: body.persona,
+        persona: resolvedPersona,
+        isCatalogPersona,
         isRealPerson: body.isRealPerson,
         realName: body.realName,
-        groupName: body.groupName,
+        groupName: resolvedGroupName,
         mode: body.mode,
         messages: body.messages,
         nativeLanguageCode: body.nativeLanguageCode,

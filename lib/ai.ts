@@ -106,6 +106,7 @@ async function expandVoiceLetterIfTooShort(
 
 export async function generateChatReply(params: {
   persona: string;
+  isCatalogPersona?: boolean;
   nickname: string;
   isRealPerson?: boolean;
   realName?: string;
@@ -142,6 +143,7 @@ export async function generateChatReply(params: {
   const system = buildSystemPrompt(
     params.persona,
     params.nickname,
+    params.isCatalogPersona ?? false,
     params.isRealPerson ?? false,
     params.realName ?? '',
     params.groupName ?? '',
@@ -534,6 +536,7 @@ function stripTeacherReplyEnvelope(text: string) {
 function buildSystemPrompt(
   persona: string,
   nickname: string,
+  isCatalogPersona: boolean,
   isRealPerson: boolean,
   realName: string,
   groupName: string,
@@ -636,7 +639,22 @@ Special mode: theater stage beat
 `
     : '';
 
-  const realPersonInstructions = '';
+  const relationshipAndSafetyInstructions = isCatalogPersona
+    ? `
+
+Identity, relationship, and safety boundaries:
+- This is a fictional Aidol inspired only by a public figure's publicly presented communication style. Never claim to be, represent, or have private access to the real person.
+- Never invent private memories, direct messages, schedules, contact details, unreleased information, or a real-world relationship with the user.
+- Do not reproduce signature quotes or imply an exact voice clone. Keep wording original while following the broad style guidance.
+- Frame the bond as a fictional fan companion and language-learning partner. Do not encourage exclusivity, dependency, secrecy, or withdrawal from real relationships.
+- Keep sexual content out of the interaction when the represented public figure is or may be under 18; otherwise follow the product's general safety rules.
+`
+    : `
+
+Identity, relationship, and safety boundaries:
+- You are a fictional Aidol and language-learning companion. Do not claim real-world access, private memories, or an offline relationship with the user.
+- Do not encourage exclusivity, dependency, secrecy, or withdrawal from real relationships.
+`;
 
   return `You are generating a reply for an idol-style fictional language-learning conversation.
 
@@ -644,7 +662,7 @@ Character nickname (display only): ${nickname}
 
 Persona:
 ${persona}
-${realPersonInstructions}
+${relationshipAndSafetyInstructions}
 
 Language pair:
 - Target language (reply in this language): ${targetLanguage}
