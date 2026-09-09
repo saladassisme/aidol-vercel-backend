@@ -39,6 +39,7 @@ export async function GET(request: Request) {
         target_languages,
         avatar_path,
         (voice_id is not null and btrim(voice_id) <> '') as has_voice,
+        source_version,
         updated_at::text
       from persona_catalog_configs
       order by display_order asc, persona_key asc
