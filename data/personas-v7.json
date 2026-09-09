@@ -1,12 +1,12 @@
 {
-  "version": "2026-09-v7-rich-132-launch-29",
+  "version": "2026-09-v8-rich-132-launch-29-avatars-1",
   "personas": [
     {
       "key": "01_cortis_keonho",
       "displayOrder": 1,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/3b/bd/db/3bbddbe20a4d4e3bd35f1c5a2e2d160a.jpg",
       "profile": {
         "identity": {
           "display_name": "Keonho",
@@ -163,7 +163,7 @@
       "displayOrder": 2,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/ed/b9/5e/edb95ed9eb4bd93b00c0f18a51af62bb.jpg",
       "profile": {
         "identity": {
           "display_name": "Martin",
@@ -322,7 +322,7 @@
       "displayOrder": 3,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/c0/c4/d6/c0c4d6fa731148ffb1911c4b57478007.jpg",
       "profile": {
         "identity": {
           "display_name": "James",
@@ -485,7 +485,7 @@
       "displayOrder": 4,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/1f/cb/e4/1fcbe4f2ec0cc8ba0d5ace2f667cc27e.jpg",
       "profile": {
         "identity": {
           "display_name": "Juhoon",
@@ -640,7 +640,7 @@
       "displayOrder": 5,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": "https://i.pinimg.com/736x/11/85/8a/11858a8e2ed2111c95e34efd62f2a701.jpg",
+      "avatarPath": "https://i.pinimg.com/736x/dc/48/a2/dc48a2896853f33f6f22d29c39fbbf00.jpg",
       "profile": {
         "identity": {
           "display_name": "Seonghyeon",
@@ -794,7 +794,7 @@
       "displayOrder": 6,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/36/aa/b8/36aab88eda128359fab0905c6be44eb2.jpg",
       "profile": {
         "identity": {
           "display_name": "Shinyu",
@@ -957,7 +957,7 @@
       "displayOrder": 7,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/07/0d/41/070d41c10babb709e5818e3578a722a5.jpg",
       "profile": {
         "identity": {
           "display_name": "Dohoon",
@@ -1264,7 +1264,7 @@
       "displayOrder": 9,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/3c/ad/a2/3cada25f4cd3b3e67302fecaf97651f1.jpg",
       "profile": {
         "identity": {
           "display_name": "Hanjin",
@@ -1729,7 +1729,7 @@
       "displayOrder": 12,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/ae/b8/30/aeb830c34faf1eda7555c7b3c047cab3.jpg",
       "profile": {
         "identity": {
           "display_name": "Jungwon",
@@ -2044,7 +2044,7 @@
       "displayOrder": 14,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/72/2c/81/722c81b38d216f88de9cad1a5ac718c7.jpg",
       "profile": {
         "identity": {
           "display_name": "Jake",
@@ -2203,7 +2203,7 @@
       "displayOrder": 15,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/f4/b8/07/f4b807a3783d305928a52145e7a3b603.jpg",
       "profile": {
         "identity": {
           "display_name": "Sunghoon",
@@ -2508,7 +2508,7 @@
       "displayOrder": 17,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/3c/6d/4a/3c6d4a0f4b83f424803287d911aed2ae.jpg",
       "profile": {
         "identity": {
           "display_name": "NI-KI",
@@ -4080,7 +4080,7 @@
       "displayOrder": 27,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/ef/30/de/ef30de36d3139055f6dc80abf1bcbe71.jpg",
       "profile": {
         "identity": {
           "display_name": "Jaehyun",
@@ -4236,7 +4236,7 @@
       "displayOrder": 28,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/d7/d2/9d/d7d29d4d3e3b7bec1ef0a55f4d2468d6.jpg",
       "profile": {
         "identity": {
           "display_name": "Taesan",
@@ -5012,7 +5012,7 @@
       "displayOrder": 33,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/c0/dc/92/c0dc92e5cb9cdf1df274e17ba4509877.jpg",
       "profile": {
         "identity": {
           "display_name": "Wonbin",
@@ -5326,7 +5326,7 @@
       "displayOrder": 35,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/ce/96/9d/ce969d7e94797e6964f6c833385cabe8.jpg",
       "profile": {
         "identity": {
           "display_name": "Anton",
@@ -5954,7 +5954,7 @@
       "displayOrder": 39,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/da/90/d0/da90d0cf76f8ec1517880ae9a120153e.jpg",
       "profile": {
         "identity": {
           "display_name": "Woochan",
@@ -6272,7 +6272,7 @@
       "displayOrder": 41,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/76/8a/a5/768aa5abfd6a18e08f2676a75506254b.jpg",
       "profile": {
         "identity": {
           "display_name": "HARUA",
@@ -6433,7 +6433,7 @@
       "displayOrder": 42,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/bb/79/a7/bb79a747f3ce9a19337b08a71a4ed65b.jpg",
       "profile": {
         "identity": {
           "display_name": "NICHOLAS",
@@ -8288,7 +8288,7 @@
       "displayOrder": 54,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/4a/13/79/4a137931fc7d3eb5534c4a14c60845d9.jpg",
       "profile": {
         "identity": {
           "display_name": "Sangwon",
@@ -8438,7 +8438,7 @@
       "displayOrder": 55,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/c8/7f/a1/c87fa12d5078c329b9fae3aa7fb44303.jpg",
       "profile": {
         "identity": {
           "display_name": "Xinlong",
@@ -11563,7 +11563,7 @@
       "displayOrder": 75,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/fc/7b/d6/fc7bd62541b9b4189299722279fd172d.jpg",
       "profile": {
         "identity": {
           "display_name": "Jyutaro Yamanaka",
@@ -15295,7 +15295,7 @@
       "displayOrder": 99,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/25/9d/bc/259dbceab43907d735fc12179c5527c7.jpg",
       "profile": {
         "identity": {
           "display_name": "Noah",
@@ -15455,7 +15455,7 @@
       "displayOrder": 100,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/d9/cd/70/d9cd70c4b7ff0898d7a8ab41a2757d09.jpg",
       "profile": {
         "identity": {
           "display_name": "Bamby",
@@ -15770,7 +15770,7 @@
       "displayOrder": 102,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/6e/62/00/6e6200e12287679a3f27bb9de01a75e6.jpg",
       "profile": {
         "identity": {
           "display_name": "Byeon Woo-seok",
@@ -16232,7 +16232,7 @@
       "displayOrder": 105,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/b0/24/ba/b024ba39965982ced4d1a0a9af17912f.jpg",
       "profile": {
         "identity": {
           "display_name": "Gemini Norawit",
@@ -16859,7 +16859,7 @@
       "displayOrder": 109,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/f9/52/0b/f9520bb8d1f8064f49278372a988376d.jpg",
       "profile": {
         "identity": {
           "display_name": "Copper",
@@ -17012,7 +17012,7 @@
       "displayOrder": 110,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/8b/0a/38/8b0a387c7e71edeffda5d72f95540252.jpg",
       "profile": {
         "identity": {
           "display_name": "Peemwasu",
@@ -18905,7 +18905,7 @@
       "displayOrder": 122,
       "isEnabled": true,
       "searchAliases": [],
-      "avatarPath": null,
+      "avatarPath": "https://i.pinimg.com/736x/ee/6d/16/ee6d1616feaf12e73b98a88299fba123.jpg",
       "profile": {
         "identity": {
           "display_name": "张凌赫",
