@@ -43,7 +43,7 @@ export function limitsForMember(isMember: boolean) {
     dailyTheaterSessions: 0,
     theaterPartnerReplyLimit: quotaLimit('FREE_THEATER_PARTNER_REPLY_LIMIT', 15),
     monthlyVoiceClones: quotaLimit('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
-    maxProfiles: 1,
+    maxProfiles: 2,
     voiceEnabled: true,
     proactiveEnabled: false
   };
