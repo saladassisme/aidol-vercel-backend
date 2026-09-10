@@ -274,7 +274,7 @@ export async function ensurePersonaSeedRows() {
       seed.target_languages,
       seed.avatar_path,
       seed.source_version
-    from jsonb_to_recordset(${JSON.stringify(seedRows)}::jsonb) as seed(
+    from jsonb_to_recordset(${sql.json(JSON.parse(JSON.stringify(seedRows)))}) as seed(
       persona_key text,
       display_order integer,
       is_enabled boolean,
