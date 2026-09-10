@@ -38,6 +38,8 @@ export async function GET(request: Request) {
         persona_style,
         target_languages,
         avatar_path,
+        welcome_intro_audio_paths,
+        welcome_greeting_audio_paths,
         (
           (voice_id_mainland is not null and btrim(voice_id_mainland) <> '')
           or (voice_id_overseas is not null and btrim(voice_id_overseas) <> '')

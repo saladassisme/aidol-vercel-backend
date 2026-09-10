@@ -64,6 +64,8 @@ export type PersonaCatalogRow = {
   persona_style: unknown;
   target_languages: unknown;
   avatar_path: string | null;
+  welcome_intro_audio_paths: unknown;
+  welcome_greeting_audio_paths: unknown;
   has_voice: boolean;
   source_version: string;
   updated_at: string;
@@ -78,6 +80,10 @@ export type PersonaCatalogItem = {
   persona: PersonaCatalogStyle;
   targetLanguages: string[];
   avatarURL?: string;
+  welcomeAudio?: {
+    intro: Record<string, string>;
+    greeting: Record<string, string>;
+  };
   hasVoice: boolean;
 };
 
@@ -201,6 +207,15 @@ function resolveAssetURL(value: string | null | undefined, resourceBaseURL: stri
   if (!trimmed) return undefined;
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return new URL(trimmed.replace(/^\/+/, ''), ensureTrailingSlash(resourceBaseURL)).toString();
+}
+
+function resolveAssetMap(value: unknown, resourceBaseURL: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0)
+      .map(([language, path]) => [language, resolveAssetURL(path, resourceBaseURL)!])
+  );
 }
 
 function seedItemToCatalogItem(item: PersonaCatalogSeedItem, resourceBaseURL: string): PersonaCatalogItem {
@@ -351,6 +366,10 @@ export function personaCatalogRowsToPayload(
         persona: personaStyle(row.persona_style),
         targetLanguages: stringArray(row.target_languages),
         avatarURL: resolveAssetURL(row.avatar_path, resourceBaseURL),
+        welcomeAudio: {
+          intro: resolveAssetMap(row.welcome_intro_audio_paths, resourceBaseURL),
+          greeting: resolveAssetMap(row.welcome_greeting_audio_paths, resourceBaseURL)
+        },
         hasVoice: row.has_voice
       }))
   };
