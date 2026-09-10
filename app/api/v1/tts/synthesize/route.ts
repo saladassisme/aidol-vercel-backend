@@ -73,13 +73,22 @@ export async function POST(request: Request) {
 
     let resolvedVoiceId = body.voiceId;
     if (body.personaKey) {
-      const presetVoices = await sql<{ voice_id: string | null }[]>`
-        select voice_id
+      const presetVoices = await sql<Array<{
+        voice_id: string | null;
+        voice_id_mainland: string | null;
+        voice_id_overseas: string | null;
+      }>>`
+        select voice_id, voice_id_mainland, voice_id_overseas
         from persona_catalog_configs
         where persona_key = ${body.personaKey}
         limit 1
       `;
-      resolvedVoiceId = presetVoices[0]?.voice_id?.trim() || undefined;
+      const presetVoice = presetVoices[0];
+      resolvedVoiceId = (
+        clientRegion === 'mainland'
+          ? presetVoice?.voice_id_mainland
+          : presetVoice?.voice_id_overseas
+      )?.trim() || presetVoice?.voice_id?.trim() || undefined;
       if (!resolvedVoiceId) {
         return fail('This Aidol does not have a voice configured yet.', 409, 'PERSONA_VOICE_NOT_CONFIGURED');
       }
