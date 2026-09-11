@@ -4,6 +4,7 @@ import process from 'node:process';
 import postgres from 'postgres';
 
 const CONFIRMATION_FLAG = '--confirm-authorized';
+const replaceExisting = process.argv.includes('--replace');
 const manifestPath = process.argv.find((argument) => argument.endsWith('.json'));
 
 if (!process.argv.includes(CONFIRMATION_FLAG) || !manifestPath) {
@@ -153,8 +154,12 @@ try {
     `;
     const existing = existingRows[0] || {};
 
+    if (replaceExisting) {
+      await sql`update persona_catalog_configs set voice_id_mainland = null, voice_id_overseas = null, updated_at = now() where persona_key = ${personaKey}`;
+    }
+
     for (const region of regions) {
-      if (existing[region.column]) {
+      if (!replaceExisting && existing[region.column]) {
         console.log(`${personaKey} ${region.name}: already configured, skipped`);
         continue;
       }

@@ -218,6 +218,11 @@ function resolveAssetMap(value: unknown, resourceBaseURL: string) {
   );
 }
 
+function withCacheVersion(url: string, updatedAt: string | null | undefined) {
+  if (!updatedAt) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(updatedAt)}`;
+}
+
 function seedItemToCatalogItem(item: PersonaCatalogSeedItem, resourceBaseURL: string): PersonaCatalogItem {
   const publicLanguages = item.profile.public_facts?.public_languages;
   return {
@@ -367,8 +372,8 @@ export function personaCatalogRowsToPayload(
         targetLanguages: stringArray(row.target_languages),
         avatarURL: resolveAssetURL(row.avatar_path, resourceBaseURL),
         welcomeAudio: {
-          intro: resolveAssetMap(row.welcome_intro_audio_paths, resourceBaseURL),
-          greeting: resolveAssetMap(row.welcome_greeting_audio_paths, resourceBaseURL)
+          intro: Object.fromEntries(Object.entries(resolveAssetMap(row.welcome_intro_audio_paths, resourceBaseURL)).map(([language, url]) => [language, withCacheVersion(url, row.updated_at)])),
+          greeting: Object.fromEntries(Object.entries(resolveAssetMap(row.welcome_greeting_audio_paths, resourceBaseURL)).map(([language, url]) => [language, withCacheVersion(url, row.updated_at)]))
         },
         hasVoice: row.has_voice
       }))
