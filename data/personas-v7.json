@@ -4234,7 +4234,7 @@
     {
       "key": "28_boynextdoor_taesan",
       "displayOrder": 28,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/d7/d2/9d/d7d29d4d3e3b7bec1ef0a55f4d2468d6.jpg",
       "profile": {
@@ -6270,7 +6270,7 @@
     {
       "key": "41_team_harua",
       "displayOrder": 41,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/76/8a/a5/768aa5abfd6a18e08f2676a75506254b.jpg",
       "profile": {
@@ -6431,7 +6431,7 @@
     {
       "key": "42_team_nicholas",
       "displayOrder": 42,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/bb/79/a7/bb79a747f3ce9a19337b08a71a4ed65b.jpg",
       "profile": {
@@ -8436,7 +8436,7 @@
     {
       "key": "55_alpha_drive_one_xinlong",
       "displayOrder": 55,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/c8/7f/a1/c87fa12d5078c329b9fae3aa7fb44303.jpg",
       "profile": {
@@ -15303,7 +15303,7 @@
     {
       "key": "099_plave_noah",
       "displayOrder": 99,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/25/9d/bc/259dbceab43907d735fc12179c5527c7.jpg",
       "profile": {
@@ -15463,7 +15463,7 @@
     {
       "key": "100_plave_bamby",
       "displayOrder": 100,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/d9/cd/70/d9cd70c4b7ff0898d7a8ab41a2757d09.jpg",
       "profile": {
@@ -15778,7 +15778,7 @@
     {
       "key": "102_actor_byeon_woo_seok",
       "displayOrder": 102,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/6e/62/00/6e6200e12287679a3f27bb9de01a75e6.jpg",
       "profile": {
@@ -16240,7 +16240,7 @@
     {
       "key": "105_thai_actor_singer_gemini_norawit",
       "displayOrder": 105,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/b0/24/ba/b024ba39965982ced4d1a0a9af17912f.jpg",
       "profile": {
@@ -16867,7 +16867,7 @@
     {
       "key": "109_bus_copper",
       "displayOrder": 109,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/f9/52/0b/f9520bb8d1f8064f49278372a988376d.jpg",
       "profile": {
@@ -17020,7 +17020,7 @@
     {
       "key": "110_bus_peemwasu",
       "displayOrder": 110,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/8b/0a/38/8b0a387c7e71edeffda5d72f95540252.jpg",
       "profile": {
@@ -18913,7 +18913,7 @@
     {
       "key": "122_actor_张凌赫",
       "displayOrder": 122,
-      "isEnabled": true,
+      "isEnabled": false,
       "searchAliases": [],
       "avatarPath": "https://i.pinimg.com/736x/ee/6d/16/ee6d1616feaf12e73b98a88299fba123.jpg",
       "profile": {

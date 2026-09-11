@@ -14,6 +14,10 @@ function argumentValue(flag, fallback) {
 }
 
 const outputRoot = path.resolve(argumentValue('--output', '/private/tmp/aidol-onboarding-audio'));
+const requestedPersonaKeys = argumentValue('--persona-keys', '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 const databaseURL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!databaseURL) throw new Error('DATABASE_URL is required.');
 
@@ -71,6 +75,13 @@ const personas = await sql`
 await sql.end();
 
 if (personas.length === 0) throw new Error('No personas have both regional Voice IDs.');
+const selectedPersonas = requestedPersonaKeys.length > 0
+  ? personas.filter((persona) => requestedPersonaKeys.includes(persona.persona_key))
+  : personas;
+if (requestedPersonaKeys.length > 0 && selectedPersonas.length !== requestedPersonaKeys.length) {
+  const available = new Set(selectedPersonas.map((persona) => persona.persona_key));
+  throw new Error(`Unknown or incomplete regional Voice IDs for: ${requestedPersonaKeys.filter((key) => !available.has(key)).join(', ')}`);
+}
 
 async function synthesize(region, voiceId, text, languageType) {
   const response = await fetch(`${region.baseURL}/api/v1/services/aigc/multimodal-generation/generation`, {
@@ -98,7 +109,7 @@ async function synthesize(region, voiceId, text, languageType) {
 
 const tasks = [];
 const mappings = {};
-for (const persona of personas) {
+for (const persona of selectedPersonas) {
   mappings[persona.persona_key] = { intro: {}, greeting: {} };
   for (const language of languages) {
     const basePath = `personas/${persona.persona_key}/onboarding`;

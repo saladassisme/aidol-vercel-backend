@@ -55,9 +55,27 @@ function preferredName(value) {
   return (normalized || 'voice').slice(0, 32);
 }
 
-async function ensureCatalogRow(personaKey) {
+async function ensureCatalogRow(personaKey, catalogOverride) {
   const persona = catalog.get(personaKey);
-  if (!persona) throw new Error(`Unknown persona key: ${personaKey}`);
+  if (!persona) {
+    if (!catalogOverride?.displayName || !catalogOverride?.groupName) {
+      throw new Error(`Unknown persona key: ${personaKey}`);
+    }
+    await sql`
+      insert into persona_catalog_configs (
+        persona_key, display_order, is_enabled, display_name, group_name,
+        search_aliases, persona_style, target_languages, avatar_path, source_version
+      ) values (
+        ${personaKey}, ${Number(catalogOverride.displayOrder) || 9999}, ${catalogOverride.isEnabled !== false},
+        ${catalogOverride.displayName}, ${catalogOverride.groupName},
+        ${sql.json(catalogOverride.searchAliases || [])}, ${sql.json(catalogOverride.personaStyle || {})},
+        ${sql.json(catalogOverride.targetLanguages || [])}, ${catalogOverride.avatarPath || null},
+        ${catalogOverride.sourceVersion || 'manual-catalog-override'}
+      )
+      on conflict (persona_key) do nothing
+    `;
+    return;
+  }
   const profile = persona.profile;
   const languages = Array.isArray(profile?.public_facts?.public_languages)
     ? profile.public_facts.public_languages
@@ -114,10 +132,18 @@ try {
   const failures = [];
   for (const item of manifest) {
     const personaKey = String(item.personaKey || '').trim();
-    const audioPath = path.resolve(String(item.audioPath || ''));
-    const audioBytes = await fs.readFile(audioPath);
+    let audioPath = path.resolve(String(item.audioPath || ''));
+    let audioBytes;
+    try {
+      audioBytes = await fs.readFile(audioPath);
+    } catch (error) {
+      const stagedPath = path.join('/private/tmp/aidol-batch-18-samples', path.basename(audioPath));
+      if (!(error && typeof error === 'object' && error.code === 'ENOENT')) throw error;
+      audioPath = stagedPath;
+      audioBytes = await fs.readFile(audioPath);
+    }
     if (audioBytes.length >= 10 * 1024 * 1024) throw new Error(`${audioPath} must be smaller than 10 MB.`);
-    await ensureCatalogRow(personaKey);
+    await ensureCatalogRow(personaKey, item.catalog);
 
     const existingRows = await sql`
       select voice_id_mainland, voice_id_overseas
