@@ -53,7 +53,17 @@ export function quotaPolicy(key: QuotaKey, membership: MembershipState): QuotaPo
         ? { key, period: 'day', limit: membership.limits.dailyTheaterSessions }
         : { key, period: 'lifetime', limit: 1 };
     case 'theater_reply':
-      return { key, period: 'day', limit: 20 };
+      // A member can open up to five sessions per day and each session may
+      // contain at most twenty partner replies.  The ledger is currently
+      // user/day scoped, so reserve the equivalent daily capacity here; the
+      // client/session flow enforces the per-session 20-round cap.
+      return {
+        key,
+        period: 'day',
+        limit: membership.isMember
+          ? membership.limits.dailyTheaterSessions * 20
+          : 20
+      };
     case 'voice_clone':
       return { key, period: 'month', limit: membership.limits.monthlyVoiceClones };
   }
