@@ -30,8 +30,11 @@ const regions = [
     baseURL: endpointBase(process.env.DASHSCOPE_API_BASE_URL_OVERSEAS || 'https://dashscope-intl.aliyuncs.com')
   }
 ];
+const activeRegions = process.env.DASHSCOPE_ONLY_REGION
+  ? regions.filter((region) => region.name === process.env.DASHSCOPE_ONLY_REGION)
+  : regions;
 
-for (const region of regions) {
+for (const region of activeRegions) {
   if (!region.apiKey) throw new Error(`DASHSCOPE_API_KEY_${region.name.toUpperCase()} is required.`);
 }
 
@@ -154,11 +157,11 @@ try {
     `;
     const existing = existingRows[0] || {};
 
-    if (replaceExisting) {
+    if (replaceExisting && activeRegions.length === regions.length) {
       await sql`update persona_catalog_configs set voice_id_mainland = null, voice_id_overseas = null, updated_at = now() where persona_key = ${personaKey}`;
     }
 
-    for (const region of regions) {
+    for (const region of activeRegions) {
       if (!replaceExisting && existing[region.column]) {
         console.log(`${personaKey} ${region.name}: already configured, skipped`);
         continue;

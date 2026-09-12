@@ -56,7 +56,21 @@ export async function synthesizeWithDashScope(params: {
   const region = params.region === 'mainland' ? 'mainland' : 'overseas';
   const apiKey = requiredEnv(`DASHSCOPE_API_KEY_${region.toUpperCase()}`);
   const model = params.model || optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
-  const languageType = params.languageType || 'Korean';
+  const languageAliases: Record<string, string> = {
+    chinese: 'chinese', mandarin: 'chinese', 中文: 'chinese',
+    english: 'english', 英语: 'english',
+    german: 'german', 德语: 'german',
+    italian: 'italian', 意大利语: 'italian',
+    portuguese: 'portuguese', 葡萄牙语: 'portuguese',
+    spanish: 'spanish', 西班牙语: 'spanish',
+    japanese: 'japanese', 日语: 'japanese',
+    korean: 'korean', 韩语: 'korean',
+    french: 'french', 法语: 'french',
+    russian: 'russian', 俄语: 'russian',
+    auto: 'auto'
+  };
+  const requestedLanguage = (params.languageType || 'auto').trim().toLowerCase();
+  const languageType = languageAliases[requestedLanguage] || 'auto';
 
   const response = await dashscopeFetch(`${dashscopeEndpointBase(region)}/api/v1/services/aigc/multimodal-generation/generation`, {
     method: 'POST',

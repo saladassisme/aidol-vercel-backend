@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
-import { assertAndConsumeQuota, claimFreeTTSPreview, refundConsumedQuota, refundFreeTTSPreview } from '@/lib/quota';
+import { getMembership } from '@/lib/membership';
+import { commitQuota, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
 import { downloadDashScopeAudio, synthesizeWithDashScope } from '@/lib/dashscope';
 import { sha256Hex } from '@/lib/hash';
 import { sql } from '@/lib/db';
@@ -32,17 +33,28 @@ function formatTTSError(error: unknown) {
   }
 
   if (
-    lower.includes('dashscope')
-    || lower.includes('连接')
+    lower.includes('连接')
     || lower.includes('timeout')
     || lower.includes('timed out')
     || lower.includes('fetch failed')
     || lower.includes('etimedout')
+    || lower.includes('econnreset')
+    || lower.includes('connection closed')
   ) {
     return {
       message: '语音合成服务连接超时，请稍后重试。',
       status: 503,
       code: 'TTS_UPSTREAM_TIMEOUT'
+    };
+  }
+
+  // Preserve actionable upstream HTTP errors (bad voice/model/key) instead of
+  // misreporting them as network timeouts.
+  if (lower.includes('dashscope') || /http\s+[45]\d\d/.test(lower)) {
+    return {
+      message,
+      status: 502,
+      code: 'TTS_UPSTREAM_ERROR'
     };
   }
 
@@ -55,19 +67,18 @@ function formatTTSError(error: unknown) {
 
 export async function POST(request: Request) {
   logIncomingRequest('tts.synthesize', request);
-  let claimedTrial = false;
-  let consumedQuota = false;
-  let userId: string | null = null;
+  const requestId = request.headers.get('x-aidol-request-id')?.trim() || 'missing';
+  let quotaTransactionId: string | null = null;
   try {
     const auth = await requireAuth(request);
     if (isResponse(auth)) return auth;
-    userId = auth.userId;
-
     const body = BodySchema.parse(await request.json());
     const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
       ? 'mainland'
       : 'overseas';
     const trialContext = request.headers.get('x-aidol-trial') || '';
+    const requestedQuotaKey = request.headers.get('x-aidol-quota-key')?.trim() || 'voice_reply';
+    const quotaKey = requestedQuotaKey === 'theater_reply' ? 'theater_reply' : 'voice_reply';
     const isOnboardingTrial = trialContext === 'onboarding';
     const isTrial = Boolean(trialContext);
 
@@ -133,15 +144,18 @@ export async function POST(request: Request) {
       return ok({ audioUrl: cached[0].audio_url, audioBase64, cached: true });
     }
 
-    if (isOnboardingTrial) {
-      // Onboarding needs one reliable welcome preview for the freshly-created voice.
-      // It should not consume or be blocked by the user's normal free preview slot.
-    } else if (isTrial) {
-      claimedTrial = await claimFreeTTSPreview(auth.userId);
-      if (!claimedTrial) return fail('免费试听已用完，请开通会员后继续。', 403, 'MEMBERSHIP_REQUIRED');
-    } else {
-      await assertAndConsumeQuota(auth.userId, 'tts');
-      consumedQuota = true;
+    // Existing audio above is always free. Onboarding's two welcome clips
+    // are product setup, not user voice replies, so they are exempt as well.
+    if (!isOnboardingTrial) {
+      const membership = await getMembership(auth.userId);
+      const reservation = await reserveQuota({
+        userId: auth.userId,
+        key: quotaKey,
+        idempotencyKey: request.headers.get('x-aidol-request-id')?.trim() || crypto.randomUUID(),
+        membership,
+        metadata: { voiceId: resolvedVoiceId, preview: isTrial }
+      });
+      quotaTransactionId = reservation.transactionId;
     }
 
     const synthesized = await synthesizeWithDashScope({ text: body.text, voiceId: resolvedVoiceId, model, languageType, region: clientRegion });
@@ -161,21 +175,25 @@ export async function POST(request: Request) {
         audio_base64 = excluded.audio_base64
     `;
 
+    if (quotaTransactionId) await commitQuota(quotaTransactionId);
+
     return ok({ audioUrl: synthesized.audioURL, audioBase64, cached: false, downloadFailed: audioBase64 === null });
   } catch (error) {
-    if (consumedQuota && userId) {
-      try {
-        await refundConsumedQuota(userId, 'tts');
-      } catch {
-        // Ignore refund failures; the client can refresh quota status.
-      }
+    console.error('[aidol] tts.synthesize failed', {
+      requestId,
+      key: error instanceof QuotaExceededError ? error.key : undefined,
+      message: error instanceof Error ? error.message : String(error),
+      cause: error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined
+    });
+    if (quotaTransactionId) {
+      await releaseQuota(quotaTransactionId).catch(() => {});
     }
-    if (claimedTrial && userId) {
-      try {
-        await refundFreeTTSPreview(userId);
-      } catch {
-        // Ignore refund failures; the user can retry from the preview flow.
-      }
+    if (error instanceof QuotaExceededError) {
+      return fail(
+        '今日语音回复额度已用完，请明天再试或开通会员。',
+        403,
+        'VOICE_REPLY_QUOTA_EXCEEDED'
+      );
     }
     const formatted = formatTTSError(error);
     return fail(formatted.message, formatted.status, formatted.code);

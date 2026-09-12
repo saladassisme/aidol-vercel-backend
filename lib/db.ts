@@ -9,9 +9,13 @@ const useTransactionPooler =
 
 export const sql = postgres(databaseURL, {
   ssl: 'require',
-  max: 1,
-  idle_timeout: 20,
-  connect_timeout: 10,
+  // Keep a small pool for local development and serverless bursts. A single
+  // long-lived client can be left half-closed by PgBouncer and cause writes to
+  // fail with CONNECTION_CLOSED.
+  max: 3,
+  idle_timeout: 10,
+  max_lifetime: 60,
+  connect_timeout: 8,
   // Required for Supabase PgBouncer transaction mode (port 6543).
   prepare: !useTransactionPooler
 });

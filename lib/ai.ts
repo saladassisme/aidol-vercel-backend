@@ -76,7 +76,7 @@ async function expandVoiceLetterIfTooShort(
     messages: [
       {
         role: 'system',
-        content: `Expand the draft into a longer voice letter monologue in ${targetLanguage}. When spoken aloud it should take about 45-75 seconds. Use at least 10 sentences and at least ${minLength} characters in "reply". Keep the same mood and character. Return JSON only: {"reply":"","translation_zh":"${nativeLanguage} translation","romanization":"","vocabulary_notes":[]}.`
+        content: `Expand the draft into a natural, conversational voice-note monologue in ${targetLanguage}. When spoken aloud it should take about 45-75 seconds. Use at least 10 sentences and at least ${minLength} characters in "reply". Keep the same mood and character. Vary sentence length and cadence; use short thought groups, natural commas, occasional ellipses or dashes, and a few gentle conversational softeners. Avoid essay-like wording, lists, repetitive sentence openings, and stage directions such as [pause]. It should sound like a real person thinking aloud, not a polished script. Return JSON only: {"reply":"","translation_zh":"${nativeLanguage} translation","romanization":"","vocabulary_notes":[]}.`
       },
       {
         role: 'user',
@@ -304,7 +304,11 @@ async function ensureReplyCompleteness(
     vocabulary_notes: [...normalized.vocabulary_notes]
   };
 
-  if (mode !== 'teacher' && mode !== 'theater_stage_beat' && mode !== 'theater' && !result.translation_zh.trim()) {
+  const translationNeedsRepair = Boolean(result.translation_zh.trim())
+    && nativeLanguageCode
+    && !containsExpectedLanguage(result.translation_zh, nativeLanguageCode)
+    && languageScript(nativeLanguageCode) !== 'latin';
+  if (mode !== 'teacher' && mode !== 'theater_stage_beat' && mode !== 'theater' && (!result.translation_zh.trim() || translationNeedsRepair)) {
     const nativeLanguage = languageName(nativeLanguageCode, "the user's native language");
     const zh = await tryChatCompletion({
       ...ctx,
@@ -571,6 +575,10 @@ function buildSystemPrompt(
 
 Special mode: voice letter
 - Write a warm, intimate spoken monologue like a private voice note or a close friend's life update.
+- Write for the ear, not the page: use everyday spoken phrasing, contractions or natural colloquialisms where the language allows, and varied sentence lengths.
+- Organize the note into short thought groups. Use commas, occasional ellipses or em dashes, and a few gentle softeners (the equivalent of “well”, “actually”, or “how do I put it”) to create believable breathing points without overdoing them.
+- Let the speaker sound spontaneous: vary cadence, allow one or two mild self-corrections or unfinished transitions, and avoid perfectly symmetrical paragraphs, lists, or repeated sentence openings.
+- Do not write stage directions or literal pause markers such as [pause], (pause), or <break>; punctuation alone should suggest the rhythm.
 - Length is critical: when read aloud at a natural pace, "reply" should take about 45-75 seconds (roughly one minute).
 - For Korean/Japanese, aim for at least 10 full sentences and roughly 280-480 characters in "reply".
 - For Chinese, aim for at least 10 full sentences and roughly 180-320 characters in "reply".
@@ -724,6 +732,13 @@ function languageName(code: string | undefined, fallback: string) {
       return 'Japanese';
     case 'ko':
       return 'Korean';
+    case 'th':
+      return 'Thai';
+    case 'id':
+      return 'Indonesian';
+    case 'yue-hk':
+    case 'yue':
+      return 'Cantonese';
     case 'es':
       return 'Spanish';
     case 'fr':

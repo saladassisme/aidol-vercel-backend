@@ -14,11 +14,24 @@ const OVERSEA_RESOURCE_BASE_URL = 'https://cdn-aidol.tos-cn-hongkong.volces.com/
 const MAINLAND_RESOURCE_BASE_URL = 'https://cdn-cn-aidol.tos-cn-shanghai.volces.com/v1/';
 
 function resolveResourceBaseURL(request: Request) {
-  const hostname = new URL(request.url).hostname.toLowerCase();
-  if (hostname.startsWith('api-cn.') || hostname.includes('.api-cn.')) {
-    return MAINLAND_RESOURCE_BASE_URL;
-  }
-  return OVERSEA_RESOURCE_BASE_URL;
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const hostHeader = request.headers.get('host');
+  const urlHost = new URL(request.url).hostname;
+  const hostname = (forwardedHost ?? hostHeader ?? urlHost)
+    .split(',')[0]
+    .trim()
+    .split(':')[0]
+    .toLowerCase();
+
+  const isMainland =
+    hostname === 'api-cn.aidolapp.site' ||
+    hostname.endsWith('.api-cn.aidolapp.site') ||
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1';
+
+  return isMainland
+    ? MAINLAND_RESOURCE_BASE_URL
+    : OVERSEA_RESOURCE_BASE_URL;
 }
 
 export async function GET(request: Request) {

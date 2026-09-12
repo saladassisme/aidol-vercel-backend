@@ -3,6 +3,8 @@ import { isResponse, requireAuth } from '@/lib/auth';
 import { cloneVoiceWithDashScope, dashscopeEndpointBase } from '@/lib/dashscope';
 import { sql } from '@/lib/db';
 import { logIncomingRequest } from '@/lib/request-log';
+import { getMembership } from '@/lib/membership';
+import { commitQuota, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -11,6 +13,7 @@ export async function POST(request: Request) {
   logIncomingRequest('voice.clone', request);
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+  let quotaTransactionId: string | null = null;
   try {
     console.log(`[voice.clone] ${requestId} start`);
     const auth = await requireAuth(request);
@@ -38,6 +41,16 @@ export async function POST(request: Request) {
     console.log(`[voice.clone] ${requestId} received file name=${file.name || 'unknown'} type=${file.type || 'unknown'} size=${file.size} preferredName=${preferredName}`);
     const arrayBuffer = await file.arrayBuffer();
 
+    const membership = await getMembership(auth.userId);
+    const reservation = await reserveQuota({
+      userId: auth.userId,
+      key: 'voice_clone',
+      idempotencyKey: request.headers.get('x-aidol-request-id')?.trim() || requestId,
+      membership,
+      metadata: { preferredName, size: file.size }
+    });
+    quotaTransactionId = reservation.transactionId;
+
     console.log(`[voice.clone] ${requestId} dashscope clone start region=${clientRegion} endpoint=${dashscopeEndpointBase(clientRegion)}`);
     const cloned = await cloneVoiceWithDashScope({
       audioData: Buffer.from(arrayBuffer),
@@ -53,10 +66,16 @@ export async function POST(request: Request) {
       values (${id}, ${auth.userId}, ${cloned.provider}, ${cloned.model}, ${cloned.voiceId}, ${preferredName})
     `;
 
+    await commitQuota(quotaTransactionId);
+
     console.log(`[voice.clone] ${requestId} success durationMs=${Date.now() - startedAt}`);
     return ok({ id, voiceId: cloned.voiceId, provider: cloned.provider, model: cloned.model, displayName: preferredName });
   } catch (error) {
+    if (quotaTransactionId) await releaseQuota(quotaTransactionId).catch(() => {});
     console.error(`[voice.clone] ${requestId} failed durationMs=${Date.now() - startedAt}`, error);
+    if (error instanceof QuotaExceededError) {
+      return fail('本月声音创建额度已用完，请下月再试。', 403, 'VOICE_CLONE_QUOTA_EXCEEDED');
+    }
     return fail(error instanceof Error ? error.message : 'Unknown error', 500, 'VOICE_CLONE_FAILED');
   }
 }

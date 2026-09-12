@@ -1,6 +1,7 @@
 import { fail, ok } from '@/lib/response';
 import { limitsForMember } from '@/lib/membership';
 import { getOrCreateUserQuotaStatus } from '@/lib/quota';
+import { getQuotaSnapshots } from '@/lib/quota-engine';
 import { setCachedUserAccess } from '@/lib/db';
 import { logIncomingRequest } from '@/lib/request-log';
 
@@ -26,24 +27,30 @@ export async function GET(request: Request) {
       plan: row.plan,
       is_member: row.is_member
     });
-    return ok({
-      membership: {
+    const membership = {
         isMember: row.is_member,
         productId: row.product_id,
         expiresAt: row.expires_at,
         plan: row.plan,
         limits: limitsForMember(row.is_member)
-      },
+      };
+    const quotas = await getQuotaSnapshots(row.id, membership);
+    const used = (key: string) => quotas.find((quota) => quota.key === key)?.used ?? 0;
+    return ok({
+      membership,
       usage: {
-        chat_reply_count: row.chat_reply_count,
-        tts_count: row.tts_count,
-        voice_clone_count: row.voice_clone_count,
-        theater_session_count: row.theater_session_count
+        chat_reply_count: used('chat_reply'),
+        message_send_count: used('message_send'),
+        tts_count: used('voice_reply'),
+        voice_letter_count: used('voice_letter'),
+        voice_clone_count: used('voice_clone'),
+        theater_session_count: used('theater_session')
       },
       trials: {
-        voiceLetterTrialUsed: Boolean(row.voice_letter_trial_used_at),
-        theaterTrialUsed: Boolean(row.theater_trial_used_at)
-      }
+        voiceLetterTrialUsed: !row.is_member && used('voice_letter') > 0,
+        theaterTrialUsed: !row.is_member && used('theater_session') > 0
+      },
+      quotas
     });
   } catch (error) {
     return fail(error instanceof Error ? error.message : 'Unknown error', 500, 'QUOTA_STATUS_FAILED');

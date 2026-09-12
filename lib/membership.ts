@@ -12,9 +12,11 @@ export type MembershipState = {
   plan: 'free' | 'monthly' | 'yearly';
   limits: {
     dailyChatReplies: number;
+    dailyMessageSends: number;
     dailyTTS: number;
     dailyTheaterSessions: number;
     theaterPartnerReplyLimit: number;
+    dailyVoiceLetters: number;
     monthlyVoiceClones: number;
     maxProfiles: number;
     voiceEnabled: boolean;
@@ -26,9 +28,11 @@ export function limitsForMember(isMember: boolean) {
   if (isMember) {
     return {
       dailyChatReplies: quotaLimit('MEMBER_DAILY_CHAT_LIMIT', 200),
+      dailyMessageSends: quotaLimit('MEMBER_DAILY_MESSAGE_SEND_LIMIT', 200),
       dailyTTS: quotaLimit('MEMBER_DAILY_TTS_LIMIT', 100),
       dailyTheaterSessions: quotaLimit('MEMBER_DAILY_THEATER_LIMIT', 5),
       theaterPartnerReplyLimit: quotaLimit('MEMBER_THEATER_PARTNER_REPLY_LIMIT', 15),
+      dailyVoiceLetters: quotaLimit('MEMBER_DAILY_VOICE_LETTER_LIMIT', 1),
       monthlyVoiceClones: quotaLimit('MEMBER_MONTHLY_VOICE_CLONE_LIMIT', 10),
       maxProfiles: 3,
       voiceEnabled: true,
@@ -39,9 +43,11 @@ export function limitsForMember(isMember: boolean) {
   return {
     // Free tier defaults (can be raised via env, but never lowered below these minimums).
     dailyChatReplies: quotaLimit('FREE_DAILY_CHAT_LIMIT', 20),
+    dailyMessageSends: quotaLimit('FREE_DAILY_MESSAGE_SEND_LIMIT', 20),
     dailyTTS: quotaLimit('FREE_DAILY_TTS_LIMIT', 5),
     dailyTheaterSessions: 0,
     theaterPartnerReplyLimit: quotaLimit('FREE_THEATER_PARTNER_REPLY_LIMIT', 15),
+    dailyVoiceLetters: 0,
     monthlyVoiceClones: quotaLimit('FREE_MONTHLY_VOICE_CLONE_LIMIT', 3),
     maxProfiles: 2,
     voiceEnabled: true,

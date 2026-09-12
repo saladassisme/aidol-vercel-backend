@@ -2,15 +2,12 @@ import { z } from 'zod';
 import { fail, ok } from '@/lib/response';
 import { limitsForMember } from '@/lib/membership';
 import {
-  assertAndConsumeQuota,
-  claimTheaterTrial,
-  claimVoiceLetterTrial,
-  getOrCreateUserWithMembershipAndConsumeChatQuota,
-  getOrCreateUserQuotaStatus,
-  refundConsumedQuota,
-  refundTheaterTrial,
-  refundVoiceLetterTrial
-} from '@/lib/quota';
+  commitQuota,
+  getQuotaSnapshots,
+  QuotaExceededError,
+  releaseQuota,
+  reserveQuota
+} from '@/lib/quota-engine';
 import {
   getCachedUserAccess,
   getOrCreateUserWithMembership,
@@ -21,14 +18,6 @@ import { logIncomingRequest } from '@/lib/request-log';
 import { resolvePersonaCatalogPrompt } from '@/lib/persona-catalog';
 
 export const runtime = 'nodejs';
-
-type ChatAccessWithQuota = Awaited<ReturnType<typeof getOrCreateUserWithMembershipAndConsumeChatQuota>>;
-
-function hasChatQuota(
-  access: Awaited<ReturnType<typeof getOrCreateUserWithMembership>> | ChatAccessWithQuota | null
-): access is ChatAccessWithQuota {
-  return Boolean(access && 'quota_remaining' in access && 'quota_limit' in access);
-}
 
 const BodySchema = z.object({
   profileId: z.string().optional(),
@@ -71,7 +60,10 @@ export async function POST(request: Request) {
 
   logIncomingRequest('chat.reply', request, { requestId });
   logStep('received');
-  let consumedTheaterSession = false;
+  let theaterQuotaTransactionId: string | null = null;
+  let theaterReplyQuotaTransactionId: string | null = null;
+  let contentQuotaTransactionId: string | null = null;
+  let messageQuotaTransactionId: string | null = null;
   let access: Awaited<ReturnType<typeof getOrCreateUserWithMembership>> | null = null;
   let bodyParseError: unknown = null;
   const deviceId = request.headers.get('x-aidol-device-id')?.trim();
@@ -96,16 +88,7 @@ export async function POST(request: Request) {
         if (!body) {
           return null;
         }
-        if (body.mode === 'chat' && cachedAccess) {
-          return cachedAccess;
-        }
-        if (body.mode === 'chat') {
-          return getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId);
-        }
-        if (body.mode === 'voice_letter' || body.mode === 'theater' || body.mode === 'theater_stage_beat') {
-          return getOrCreateUserQuotaStatus(deviceId);
-        }
-        return getOrCreateUserWithMembership(deviceId);
+        return cachedAccess ?? getOrCreateUserWithMembership(deviceId);
       })
       .catch((error) => {
         console.warn('[aidol] chat.reply access fallback', {
@@ -145,53 +128,69 @@ export async function POST(request: Request) {
     const isTheaterDialogue = body.mode === 'theater';
     const isVoiceLetter = body.mode === 'voice_letter';
 
-    let claimedTrial: 'theater' | 'voice_letter' | null = null;
-    let consumedChatQuota = false;
     if (!membership.isMember) {
       if (isTheaterDialogue) {
         if (isTheaterSessionStart) {
-          if ('theater_trial_used_at' in resolvedAccess && resolvedAccess.theater_trial_used_at) {
-            return fail('The theater trial has been used. Membership is required.', 403, 'THEATER_TRIAL_USED');
-          }
-          // Claim only after the opening reply is generated successfully.
-          // A provider timeout must not consume the one-time trial.
+          // The lifetime theater quota is reserved below and committed only
+          // after the opening reply succeeds.
         } else {
-          if (!('theater_trial_used_at' in resolvedAccess) || !resolvedAccess.theater_trial_used_at) {
+          const quotas = await getQuotaSnapshots(userAccess.id, membership);
+          const trialUsed = (quotas.find((item) => item.key === 'theater_session')?.used ?? 0) > 0;
+          if (!trialUsed) {
             return fail('The theater trial has not been started.', 403, 'THEATER_TRIAL_REQUIRED');
           }
         }
       }
-      if (isVoiceLetter) {
-        if ('voice_letter_trial_used_at' in resolvedAccess && resolvedAccess.voice_letter_trial_used_at) {
-          return fail('The voice letter trial has been used. Membership is required.', 403, 'VOICE_LETTER_TRIAL_USED');
-        }
-      }
-    } else if (isTheaterDialogue && isTheaterSessionStart) {
-      await assertAndConsumeQuota(userAccess.id, 'theater_session', membership);
-      consumedTheaterSession = true;
+    }
+
+    if (isTheaterDialogue && isTheaterSessionStart) {
+      const reservation = await reserveQuota({
+        userId: userAccess.id,
+        key: 'theater_session',
+        idempotencyKey: `${requestId}:theater-session`,
+        membership,
+        metadata: { mode: body.mode, profileId: body.profileId }
+      });
+      theaterQuotaTransactionId = reservation.transactionId;
       logStep('theater_session.quota.ok');
     }
 
-    let quota;
+    let quota = { remaining: 0, limit: 0 };
     try {
       if (isTheaterDialogue) {
-        // Theater has its own session/turn limits; it must not consume the
-        // user's ordinary daily text-reply quota, including the free trial.
+        const theaterReplyReservation = await reserveQuota({
+          userId: userAccess.id,
+          key: 'theater_reply',
+          idempotencyKey: `${requestId}:theater-reply`,
+          membership,
+          metadata: { mode: body.mode, profileId: body.profileId }
+        });
+        theaterReplyQuotaTransactionId = theaterReplyReservation.transactionId;
         quota = { remaining: 0, limit: 0 };
-      } else if (!isVoiceLetter && hasChatQuota(resolvedAccess)) {
-        quota = {
-          remaining: resolvedAccess.quota_remaining,
-          limit: resolvedAccess.quota_limit
-        };
-        consumedChatQuota = true;
       } else {
-        quota = await assertAndConsumeQuota(userAccess.id, 'chat', membership);
-        consumedChatQuota = true;
+        const sendReservation = await reserveQuota({
+          userId: userAccess.id,
+          key: 'message_send',
+          idempotencyKey: `${requestId}:message-send`,
+          membership,
+          metadata: { mode: body.mode, profileId: body.profileId }
+        });
+        messageQuotaTransactionId = sendReservation.transactionId;
+        const reservation = await reserveQuota({
+          userId: userAccess.id,
+          key: isVoiceLetter ? 'voice_letter' : 'chat_reply',
+          idempotencyKey: `${requestId}:content`,
+          membership,
+          metadata: { mode: body.mode, profileId: body.profileId }
+        });
+        contentQuotaTransactionId = reservation.transactionId;
+        quota = { remaining: 0, limit: reservation.limit };
       }
       logStep('chat.quota.ok', { remaining: quota.remaining, limit: quota.limit });
     } catch (error) {
-      if (consumedTheaterSession) {
-        await refundConsumedQuota(userAccess.id, 'theater_session').catch(() => {});
+      if (theaterQuotaTransactionId) {
+        await releaseQuota(theaterQuotaTransactionId).catch(() => {});
+        theaterQuotaTransactionId = null;
       }
       throw error;
     }
@@ -233,37 +232,16 @@ export async function POST(request: Request) {
         region: clientRegion
       });
 
-      if (!membership.isMember && isVoiceLetter) {
-        const okClaim = await claimVoiceLetterTrial(userAccess.id);
-        if (!okClaim) {
-          if (consumedChatQuota) {
-            await refundConsumedQuota(userAccess.id, 'chat').catch(() => {});
-            consumedChatQuota = false;
-          }
-          return fail('The voice letter trial has been used. Membership is required.', 403, 'VOICE_LETTER_TRIAL_USED');
-        }
-        claimedTrial = 'voice_letter';
-      } else if (!membership.isMember && isTheaterDialogue && isTheaterSessionStart) {
-        if (request.signal.aborted) {
-          throw new Error('Theater request was canceled before completion.');
-        }
-        const okClaim = await claimTheaterTrial(userAccess.id);
-        if (!okClaim) {
-          return fail('The theater trial has been used. Membership is required.', 403, 'THEATER_TRIAL_USED');
-        }
-        claimedTrial = 'theater';
-      }
+      if (request.signal.aborted) throw new Error('Request was canceled before completion.');
+      if (contentQuotaTransactionId) await commitQuota(contentQuotaTransactionId);
+      if (messageQuotaTransactionId) await commitQuota(messageQuotaTransactionId);
+      if (theaterQuotaTransactionId) await commitQuota(theaterQuotaTransactionId);
+      if (theaterReplyQuotaTransactionId) await commitQuota(theaterReplyQuotaTransactionId);
       logStep('model.ok', { replyChars: reply.reply.length });
 
       logStep('success', { totalMs: Date.now() - startedAt });
       return ok({ reply, quota });
     } catch (error) {
-      if (consumedChatQuota) {
-        await refundConsumedQuota(userAccess.id, 'chat').catch(() => {});
-      }
-      if (claimedTrial === 'voice_letter') {
-        await refundVoiceLetterTrial(userAccess.id).catch(() => {});
-      }
       const message = error instanceof Error ? error.message : String(error);
       const canUseSafeFallback =
         message.includes('empty content') ||
@@ -276,6 +254,10 @@ export async function POST(request: Request) {
         message.includes('HTTP 429') ||
         /HTTP 5\d\d/.test(message);
       if (canUseSafeFallback) {
+        if (contentQuotaTransactionId) await commitQuota(contentQuotaTransactionId).catch(() => {});
+        if (messageQuotaTransactionId) await commitQuota(messageQuotaTransactionId).catch(() => {});
+        if (theaterQuotaTransactionId) await commitQuota(theaterQuotaTransactionId).catch(() => {});
+        if (theaterReplyQuotaTransactionId) await commitQuota(theaterReplyQuotaTransactionId).catch(() => {});
         console.warn('[aidol] chat.reply using safe fallback', { requestId, stage, message });
         logStep('fallback.ok');
         return ok({
@@ -283,14 +265,10 @@ export async function POST(request: Request) {
           quota
         });
       }
-      if (claimedTrial === 'theater') {
-        await refundTheaterTrial(userAccess.id).catch(() => {});
-      } else if (claimedTrial === 'voice_letter') {
-        await refundVoiceLetterTrial(userAccess.id).catch(() => {});
-      }
-      if (consumedTheaterSession) {
-        await refundConsumedQuota(userAccess.id, 'theater_session').catch(() => {});
-      }
+      if (contentQuotaTransactionId) await releaseQuota(contentQuotaTransactionId).catch(() => {});
+      if (messageQuotaTransactionId) await releaseQuota(messageQuotaTransactionId).catch(() => {});
+      if (theaterQuotaTransactionId) await releaseQuota(theaterQuotaTransactionId).catch(() => {});
+      if (theaterReplyQuotaTransactionId) await releaseQuota(theaterReplyQuotaTransactionId).catch(() => {});
       throw error;
     }
   } catch (error) {
@@ -304,26 +282,17 @@ export async function POST(request: Request) {
     if (message.includes('Daily theater session limit exceeded')) {
       return fail('今日小剧场次数已用完，请明天再试。', 403, 'THEATER_DAILY_LIMIT');
     }
-    const canUseSafeFallback =
-      message.includes('empty content') ||
-      message.includes('invalid envelope') ||
-      message.includes('non-JSON content') ||
-      message.includes('timed out') ||
-      message.includes('HTTP 401') ||
-      message.includes('HTTP 408') ||
-      message.includes('HTTP 409') ||
-      message.includes('HTTP 429') ||
-      /HTTP 5\d\d/.test(message);
-    if (canUseSafeFallback && bodyParseError === null) {
-      console.warn('[aidol] chat.reply outer safe fallback', { requestId, stage, message });
-      const fallbackBody = await bodyPromise;
-      return ok({
-        reply: safeFallbackReply(
-          fallbackBody?.targetLanguageCode,
-          fallbackBody?.nativeLanguageCode,
-          fallbackBody?.mode
-        )
-      });
+    if (error instanceof QuotaExceededError) {
+      const code = error.key === 'voice_letter'
+        ? 'VOICE_LETTER_LIMIT'
+        : error.key === 'message_send'
+          ? 'MESSAGE_SEND_LIMIT'
+        : error.key === 'theater_session'
+          ? 'THEATER_DAILY_LIMIT'
+          : error.key === 'theater_reply'
+            ? 'THEATER_REPLY_LIMIT'
+          : 'CHAT_QUOTA_EXCEEDED';
+      return fail(message, 403, code);
     }
     return fail(message, 500, 'CHAT_REPLY_FAILED');
   }
