@@ -56,9 +56,16 @@ async function appStoreJWT() {
   const keyId = requiredEnv('APPLE_KEY_ID');
   const bundleId = requiredEnv('AIDOL_BUNDLE_ID');
   const privateKeyPem = requiredEnv('APPLE_PRIVATE_KEY').replace(/\\n/g, '\n');
+  const privateKeyDer = Buffer.from(
+    privateKeyPem.replace(/-----[^-]+-----/g, '').replace(/\s/g, ''),
+    'base64'
+  );
+  // Web Crypto's DOM types require an ArrayBuffer-backed BufferSource while
+  // newer @types/node exposes Buffer<ArrayBufferLike>. The bytes are unchanged;
+  // this cast only bridges the incompatible type definitions.
   const key = await crypto.subtle.importKey(
     'pkcs8',
-    Buffer.from(privateKeyPem.replace(/-----[^-]+-----/g, '').replace(/\s/g, ''), 'base64'),
+    privateKeyDer as unknown as BufferSource,
     { name: 'ECDSA', namedCurve: 'P-256' },
     false,
     ['sign']
