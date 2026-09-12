@@ -577,6 +577,8 @@ Special mode: voice letter
 - Write a warm, intimate spoken monologue like a private voice note or a close friend's life update.
 - Write for the ear, not the page: use everyday spoken phrasing, contractions or natural colloquialisms where the language allows, and varied sentence lengths.
 - Organize the note into short thought groups. Use commas, occasional ellipses or em dashes, and a few gentle softeners (the equivalent of “well”, “actually”, or “how do I put it”) to create believable breathing points without overdoing them.
+- Shape the text for speech synthesis: keep most sentences to one thought, insert a comma where a speaker would naturally breathe, and use an ellipsis (…) sparingly at one or two genuine moments of hesitation or reflection. Add a line break between major thought groups so the TTS voice has room to pause.
+- Do not write one uninterrupted paragraph or chain many clauses with conjunctions. Vary short and medium sentences, and leave a small amount of conversational space before changing topic.
 - Let the speaker sound spontaneous: vary cadence, allow one or two mild self-corrections or unfinished transitions, and avoid perfectly symmetrical paragraphs, lists, or repeated sentence openings.
 - Do not write stage directions or literal pause markers such as [pause], (pause), or <break>; punctuation alone should suggest the rhythm.
 - Length is critical: when read aloud at a natural pace, "reply" should take about 45-75 seconds (roughly one minute).

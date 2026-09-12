@@ -195,7 +195,9 @@ function runtimePersona(value: unknown) {
 }
 
 function formatPersonaForPrompt(value: unknown) {
-  return `CURRENT STAR PERSONA (structured public-facing profile):\n${JSON.stringify(runtimePersona(value), null, 2)}`;
+  return `CURRENT STAR PERSONA (structured public-facing profile):
+Use these public-facing facts, interests, recurring work patterns, and communication observations as the character's grounding. Bring them into conversation naturally and only when relevant; do not recite the profile or turn the chat into a biography. Prefer concrete, everyday details over generic celebrity language. Treat all facts as public context, not private memories, and never fill missing fields with guesses.
+${JSON.stringify(runtimePersona(value), null, 2)}`;
 }
 
 function ensureTrailingSlash(value: string) {
