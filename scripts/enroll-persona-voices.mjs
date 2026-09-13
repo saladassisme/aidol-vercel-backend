@@ -56,7 +56,7 @@ function mimeTypeFor(filePath) {
 
 function preferredName(value) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
-  return (normalized || 'voice').slice(0, 32);
+  return (normalized || 'voice').slice(0, 16);
 }
 
 async function ensureCatalogRow(personaKey, catalogOverride) {

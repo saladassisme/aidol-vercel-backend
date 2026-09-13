@@ -9,6 +9,18 @@ function normalizeURL(url: string) {
   return trimmed.startsWith('http://') ? `https://${trimmed.slice('http://'.length)}` : trimmed;
 }
 
+export function normalizeDashScopePreferredName(value: string) {
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 16);
+
+  return normalized || 'aidol_voice';
+}
+
 export async function cloneVoiceWithDashScope(params: {
   audioData: Buffer;
   mimeType: string;
@@ -20,6 +32,7 @@ export async function cloneVoiceWithDashScope(params: {
   const targetModel = optionalEnv('DASHSCOPE_TTS_VC_MODEL', 'qwen3-tts-vc-2026-01-22');
   const base64 = params.audioData.toString('base64');
   const dataURI = `data:${params.mimeType || 'audio/wav'};base64,${base64}`;
+  const preferredName = normalizeDashScopePreferredName(params.preferredName);
 
   const response = await dashscopeFetch(`${dashscopeEndpointBase(region)}/api/v1/services/audio/tts/customization`, {
     method: 'POST',
@@ -32,7 +45,7 @@ export async function cloneVoiceWithDashScope(params: {
       input: {
         action: 'create',
         target_model: targetModel,
-        preferred_name: params.preferredName.slice(0, 32) || 'aidol_voice',
+        preferred_name: preferredName,
         audio: { data: dataURI }
       }
     })
