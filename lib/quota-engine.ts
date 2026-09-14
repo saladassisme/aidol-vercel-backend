@@ -70,7 +70,7 @@ export function quotaPolicy(key: QuotaKey, membership: MembershipState): QuotaPo
 }
 
 export function quotaTimeZoneFromRequest(request: Request) {
-  const candidate = request.headers.get('x-vercel-ip-timezone')?.trim();
+  const candidate = request.headers.get('x-aidol-timezone')?.trim();
   if (!candidate) return 'UTC';
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format();
