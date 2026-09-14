@@ -4,7 +4,7 @@ import { cloneVoiceWithDashScope, dashscopeEndpointBase } from '@/lib/dashscope'
 import { sql } from '@/lib/db';
 import { logIncomingRequest } from '@/lib/request-log';
 import { getMembership } from '@/lib/membership';
-import { commitQuota, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
+import { commitQuota, quotaTimeZoneFromRequest, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -38,6 +38,7 @@ export async function POST(request: Request) {
     const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
       ? 'mainland'
       : 'overseas';
+    const timeZone = quotaTimeZoneFromRequest(request);
     console.log(`[voice.clone] ${requestId} received file name=${file.name || 'unknown'} type=${file.type || 'unknown'} size=${file.size} preferredName=${preferredName}`);
     const arrayBuffer = await file.arrayBuffer();
 
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
       key: 'voice_clone',
       idempotencyKey: request.headers.get('x-aidol-request-id')?.trim() || requestId,
       membership,
+      timeZone,
       metadata: { preferredName, size: file.size }
     });
     quotaTransactionId = reservation.transactionId;

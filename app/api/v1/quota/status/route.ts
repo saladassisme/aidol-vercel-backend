@@ -1,7 +1,7 @@
 import { fail, ok } from '@/lib/response';
 import { limitsForMember } from '@/lib/membership';
 import { getOrCreateUserQuotaStatus } from '@/lib/quota';
-import { getQuotaSnapshots } from '@/lib/quota-engine';
+import { getQuotaSnapshots, quotaTimeZoneFromRequest } from '@/lib/quota-engine';
 import { setCachedUserAccess } from '@/lib/db';
 import { logIncomingRequest } from '@/lib/request-log';
 
@@ -15,7 +15,8 @@ export async function GET(request: Request) {
       return fail('Missing x-aidol-device-id header.', 401, 'UNAUTHORIZED');
     }
 
-    const row = await getOrCreateUserQuotaStatus(deviceId);
+    const timeZone = quotaTimeZoneFromRequest(request);
+    const row = await getOrCreateUserQuotaStatus(deviceId, timeZone);
     if (!row) {
       throw new Error('Unable to resolve user access.');
     }
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
         plan: row.plan,
         limits: limitsForMember(row.is_member)
       };
-    const quotas = await getQuotaSnapshots(row.id, membership);
+    const quotas = await getQuotaSnapshots(row.id, membership, quotaTimeZoneFromRequest(request));
     const used = (key: string) => quotas.find((quota) => quota.key === key)?.used ?? 0;
     return ok({
       membership,

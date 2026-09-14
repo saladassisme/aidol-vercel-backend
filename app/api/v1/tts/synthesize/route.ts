@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { getMembership } from '@/lib/membership';
-import { commitQuota, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
+import { commitQuota, quotaTimeZoneFromRequest, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
 import { downloadDashScopeAudio, synthesizeWithDashScope } from '@/lib/dashscope';
 import { sha256Hex } from '@/lib/hash';
 import { sql } from '@/lib/db';
@@ -76,6 +76,7 @@ export async function POST(request: Request) {
     const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
       ? 'mainland'
       : 'overseas';
+    const timeZone = quotaTimeZoneFromRequest(request);
     const trialContext = request.headers.get('x-aidol-trial') || '';
     const requestedQuotaKey = request.headers.get('x-aidol-quota-key')?.trim() || 'voice_reply';
     const quotaKey = requestedQuotaKey === 'theater_reply' ? 'theater_reply' : 'voice_reply';
@@ -153,6 +154,7 @@ export async function POST(request: Request) {
         key: quotaKey,
         idempotencyKey: request.headers.get('x-aidol-request-id')?.trim() || crypto.randomUUID(),
         membership,
+        timeZone,
         metadata: { voiceId: resolvedVoiceId, preview: isTrial }
       });
       quotaTransactionId = reservation.transactionId;

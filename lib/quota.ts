@@ -4,6 +4,10 @@ import { getMembership } from './membership';
 
 export type UsageKind = 'chat' | 'tts' | 'voice_clone' | 'theater_session';
 
+function localDate(timeZone: string) {
+  return sql`(now() at time zone ${timeZone})::date`;
+}
+
 function columnFor(kind: UsageKind) {
   switch (kind) {
     case 'chat': return 'chat_reply_count';
@@ -56,8 +60,9 @@ function ensureQuotaSchema() {
   return quotaSchemaReady;
 }
 
-export async function getTodayUsage(userId: string) {
+export async function getTodayUsage(userId: string, timeZone = 'UTC') {
   await ensureQuotaSchema();
+  const date = localDate(timeZone);
   const rows = await sql<{
     chat_reply_count: number;
     tts_count: number;
@@ -66,12 +71,12 @@ export async function getTodayUsage(userId: string) {
   }[]>`
     with ensured as (
       insert into daily_usage (user_id, usage_date)
-      values (${userId}, current_date)
+      values (${userId}, ${date})
       on conflict (user_id, usage_date) do nothing
     )
     select chat_reply_count, tts_count, voice_clone_count, theater_session_count
     from daily_usage
-    where user_id = ${userId} and usage_date = current_date
+    where user_id = ${userId} and usage_date = ${date}
     limit 1
   `;
   return rows[0] ?? {
@@ -203,8 +208,9 @@ export async function claimTheaterTrial(userId: string) {
   return Boolean(rows[0]);
 }
 
-export async function getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId: string) {
+export async function getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId: string, timeZone = 'UTC') {
   await ensureQuotaSchema();
+  const date = localDate(timeZone);
 
   const id = crypto.randomUUID();
   const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
@@ -256,7 +262,7 @@ export async function getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId:
     ),
     quota_row as (
       insert into daily_usage (user_id, usage_date, chat_reply_count)
-      select user_row.id, current_date, 1
+      select user_row.id, ${date}, 1
       from user_row
       on conflict (user_id, usage_date) do update
       set chat_reply_count = daily_usage.chat_reply_count + 1
@@ -286,8 +292,9 @@ export async function getOrCreateUserWithMembershipAndConsumeChatQuota(deviceId:
   return row;
 }
 
-export async function getOrCreateUserQuotaStatus(deviceId: string) {
+export async function getOrCreateUserQuotaStatus(deviceId: string, timeZone = 'UTC') {
   await ensureQuotaSchema();
+  const date = localDate(timeZone);
 
   const id = crypto.randomUUID();
   const monthly = optionalEnv('AIDOL_PRODUCT_MONTHLY', 'aidol.membership.monthly');
@@ -331,7 +338,7 @@ export async function getOrCreateUserQuotaStatus(deviceId: string) {
     ),
     usage_init as (
       insert into daily_usage (user_id, usage_date)
-      select id, current_date
+      select id, ${date}
       from user_row
       on conflict (user_id, usage_date) do nothing
     )
@@ -352,7 +359,7 @@ export async function getOrCreateUserQuotaStatus(deviceId: string) {
     left join membership_row on true
     left join daily_usage
       on daily_usage.user_id = user_row.id
-     and daily_usage.usage_date = current_date
+     and daily_usage.usage_date = ${date}
     left join users on users.id = user_row.id
     limit 1
   `;
@@ -372,7 +379,8 @@ export async function refundTheaterTrial(userId: string) {
 export async function assertAndConsumeQuota(
   userId: string,
   kind: UsageKind,
-  membershipInput?: Awaited<ReturnType<typeof getMembership>>
+  membershipInput?: Awaited<ReturnType<typeof getMembership>>,
+  timeZone = 'UTC'
 ) {
   const membership = membershipInput ?? await getMembership(userId);
   const limit = limitFor(kind, membership.limits);
@@ -381,7 +389,7 @@ export async function assertAndConsumeQuota(
     throw new Error(kind === 'chat' ? 'Daily AI reply quota is not available.' : 'This feature requires membership.');
   }
 
-  const current = await incrementUsageCounter(userId, kind, limit);
+  const current = await incrementUsageCounter(userId, kind, limit, timeZone);
   if (current == null) {
     if (kind === 'theater_session') {
       throw new Error('Daily theater session limit exceeded.');
@@ -392,13 +400,14 @@ export async function assertAndConsumeQuota(
   return { remaining: Math.max(limit - current, 0), limit };
 }
 
-export async function refundConsumedQuota(userId: string, kind: UsageKind) {
+export async function refundConsumedQuota(userId: string, kind: UsageKind, timeZone = 'UTC') {
   await ensureQuotaSchema();
+  const date = localDate(timeZone);
   switch (kind) {
     case 'chat':
       await sql`
         insert into daily_usage (user_id, usage_date, chat_reply_count)
-        values (${userId}, current_date, 0)
+        values (${userId}, ${date}, 0)
         on conflict (user_id, usage_date) do update
         set chat_reply_count = greatest(daily_usage.chat_reply_count - 1, 0)
       `;
@@ -406,7 +415,7 @@ export async function refundConsumedQuota(userId: string, kind: UsageKind) {
     case 'tts':
       await sql`
         insert into daily_usage (user_id, usage_date, tts_count)
-        values (${userId}, current_date, 0)
+        values (${userId}, ${date}, 0)
         on conflict (user_id, usage_date) do update
         set tts_count = greatest(daily_usage.tts_count - 1, 0)
       `;
@@ -414,7 +423,7 @@ export async function refundConsumedQuota(userId: string, kind: UsageKind) {
     case 'theater_session':
       await sql`
         insert into daily_usage (user_id, usage_date, theater_session_count)
-        values (${userId}, current_date, 0)
+        values (${userId}, ${date}, 0)
         on conflict (user_id, usage_date) do update
         set theater_session_count = greatest(daily_usage.theater_session_count - 1, 0)
       `;
@@ -422,7 +431,7 @@ export async function refundConsumedQuota(userId: string, kind: UsageKind) {
     case 'voice_clone':
       await sql`
         insert into daily_usage (user_id, usage_date, voice_clone_count)
-        values (${userId}, current_date, 0)
+        values (${userId}, ${date}, 0)
         on conflict (user_id, usage_date) do update
         set voice_clone_count = greatest(daily_usage.voice_clone_count - 1, 0)
       `;
@@ -430,14 +439,15 @@ export async function refundConsumedQuota(userId: string, kind: UsageKind) {
   }
 }
 
-async function incrementUsageCounter(userId: string, kind: UsageKind, limit: number): Promise<number | null> {
+async function incrementUsageCounter(userId: string, kind: UsageKind, limit: number, timeZone = 'UTC'): Promise<number | null> {
   await ensureQuotaSchema();
+  const date = localDate(timeZone);
 
   switch (kind) {
     case 'chat': {
       const rows = await sql<{ chat_reply_count: number }[]>`
         insert into daily_usage (user_id, usage_date, chat_reply_count)
-        values (${userId}, current_date, 1)
+        values (${userId}, ${date}, 1)
         on conflict (user_id, usage_date) do update
         set chat_reply_count = daily_usage.chat_reply_count + 1
         where daily_usage.chat_reply_count < ${limit}
@@ -448,7 +458,7 @@ async function incrementUsageCounter(userId: string, kind: UsageKind, limit: num
     case 'tts': {
       const rows = await sql<{ tts_count: number }[]>`
         insert into daily_usage (user_id, usage_date, tts_count)
-        values (${userId}, current_date, 1)
+        values (${userId}, ${date}, 1)
         on conflict (user_id, usage_date) do update
         set tts_count = daily_usage.tts_count + 1
         where daily_usage.tts_count < ${limit}
@@ -459,7 +469,7 @@ async function incrementUsageCounter(userId: string, kind: UsageKind, limit: num
     case 'theater_session': {
       const rows = await sql<{ theater_session_count: number }[]>`
         insert into daily_usage (user_id, usage_date, theater_session_count)
-        values (${userId}, current_date, 1)
+        values (${userId}, ${date}, 1)
         on conflict (user_id, usage_date) do update
         set theater_session_count = daily_usage.theater_session_count + 1
         where daily_usage.theater_session_count < ${limit}
@@ -470,7 +480,7 @@ async function incrementUsageCounter(userId: string, kind: UsageKind, limit: num
     case 'voice_clone': {
       const rows = await sql<{ voice_clone_count: number }[]>`
         insert into daily_usage (user_id, usage_date, voice_clone_count)
-        values (${userId}, current_date, 1)
+        values (${userId}, ${date}, 1)
         on conflict (user_id, usage_date) do update
         set voice_clone_count = daily_usage.voice_clone_count + 1
         where daily_usage.voice_clone_count < ${limit}

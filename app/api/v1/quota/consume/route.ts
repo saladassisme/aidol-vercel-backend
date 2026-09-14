@@ -1,7 +1,7 @@
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
 import { assertAndConsumeQuota } from '@/lib/quota';
-import { commitQuota, QuotaExceededError, reserveQuota } from '@/lib/quota-engine';
+import { commitQuota, quotaTimeZoneFromRequest, QuotaExceededError, reserveQuota } from '@/lib/quota-engine';
 import { getMembership } from '@/lib/membership';
 import { logIncomingRequest } from '@/lib/request-log';
 
@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     if (isResponse(auth)) return auth;
 
     const body = await request.json().catch(() => ({}));
+    const timeZone = quotaTimeZoneFromRequest(request);
     const kindRaw = String(body.kind || '').trim();
     if (kindRaw === 'character_create') {
       const membership = await getMembership(auth.userId);
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
         ? 'theater_session'
         : 'chat';
 
-    const quota = await assertAndConsumeQuota(auth.userId, kind);
+    const quota = await assertAndConsumeQuota(auth.userId, kind, undefined, timeZone);
     return ok({ kind, quota });
   } catch (error) {
     if (error instanceof QuotaExceededError) return fail('Character creation limit reached.', 403, 'CHARACTER_CREATE_LIMIT');

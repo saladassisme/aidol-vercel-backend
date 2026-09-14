@@ -69,9 +69,22 @@ export function quotaPolicy(key: QuotaKey, membership: MembershipState): QuotaPo
   }
 }
 
-async function serverPeriodKeys() {
+export function quotaTimeZoneFromRequest(request: Request) {
+  const candidate = request.headers.get('x-vercel-ip-timezone')?.trim();
+  if (!candidate) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format();
+    return candidate;
+  } catch {
+    return 'UTC';
+  }
+}
+
+async function serverPeriodKeys(timeZone = 'UTC') {
   const rows = await sql<{ day_key: string; month_key: string }[]>`
-    select current_date::text as day_key, to_char(current_date, 'YYYY-MM') as month_key
+    select
+      (now() at time zone ${timeZone})::date::text as day_key,
+      to_char((now() at time zone ${timeZone})::date, 'YYYY-MM') as month_key
   `;
   // PostgreSQL always returns one row for this scalar SELECT, but keep the
   // quota path fail-safe if a proxy/driver unexpectedly yields an empty list.
@@ -81,9 +94,9 @@ async function serverPeriodKeys() {
   return { day_key: dayKey, month_key: dayKey.slice(0, 7) };
 }
 
-async function periodKeyFor(period: QuotaPeriod) {
+async function periodKeyFor(period: QuotaPeriod, timeZone: string) {
   if (period === 'lifetime') return 'lifetime';
-  const keys = await serverPeriodKeys();
+  const keys = await serverPeriodKeys(timeZone);
   return period === 'month' ? keys.month_key : keys.day_key;
 }
 
@@ -93,10 +106,11 @@ export async function reserveQuota(params: {
   idempotencyKey: string;
   membership: MembershipState;
   metadata?: postgres.JSONValue;
+  timeZone?: string;
 }): Promise<QuotaReservation> {
   const policy = quotaPolicy(params.key, params.membership);
   if (policy.limit <= 0) throw new QuotaExceededError(params.key);
-  const periodKey = await periodKeyFor(policy.period);
+  const periodKey = await periodKeyFor(policy.period, params.timeZone ?? 'UTC');
   const transactionId = crypto.randomUUID();
 
   return sql.begin(async (tx) => {
@@ -198,7 +212,7 @@ async function finishReservation(transactionId: string, target: 'committed' | 'r
   });
 }
 
-export async function getQuotaSnapshots(userId: string, membership: MembershipState) {
+export async function getQuotaSnapshots(userId: string, membership: MembershipState, timeZone = 'UTC') {
   const keys: QuotaKey[] = [
     'chat_reply',
     'message_send',
@@ -209,7 +223,7 @@ export async function getQuotaSnapshots(userId: string, membership: MembershipSt
     'theater_reply',
     'voice_clone'
   ];
-  const periods = await serverPeriodKeys();
+  const periods = await serverPeriodKeys(timeZone);
   const periodFor = (period: QuotaPeriod) => period === 'lifetime'
     ? 'lifetime'
     : period === 'month' ? periods.month_key : periods.day_key;

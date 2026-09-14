@@ -5,7 +5,7 @@ import { downloadDashScopeAudio, synthesizeWithDashScope } from '@/lib/dashscope
 import { sql } from '@/lib/db';
 import { getMembership } from '@/lib/membership';
 import { resolvePersonaCatalogPrompt } from '@/lib/persona-catalog';
-import { commitQuota, getQuotaSnapshots, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
+import { commitQuota, getQuotaSnapshots, quotaTimeZoneFromRequest, QuotaExceededError, releaseQuota, reserveQuota } from '@/lib/quota-engine';
 import { fail, ok } from '@/lib/response';
 import { logIncomingRequest } from '@/lib/request-log';
 
@@ -70,8 +70,9 @@ export async function POST(request: Request) {
     if (isResponse(auth)) return auth;
     const body = BodySchema.parse(await request.json());
     const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland' ? 'mainland' : 'overseas';
+    const timeZone = quotaTimeZoneFromRequest(request);
     const membership = await getMembership(auth.userId);
-    const snapshot = (await getQuotaSnapshots(auth.userId, membership)).find((item) => item.key === 'voice_letter');
+    const snapshot = (await getQuotaSnapshots(auth.userId, membership, timeZone)).find((item) => item.key === 'voice_letter');
     if (!snapshot) throw new Error('Voice letter quota policy is unavailable.');
 
     const existing = await voiceLetterForPeriod(auth.userId, snapshot.periodKey);
@@ -95,6 +96,7 @@ export async function POST(request: Request) {
       key: 'voice_letter',
       idempotencyKey: `${requestId}:voice-letter`,
       membership,
+      timeZone,
       metadata: { profileId: body.profileId }
     });
     quotaTransactionId = reservation.transactionId;

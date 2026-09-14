@@ -4,6 +4,7 @@ import { limitsForMember } from '@/lib/membership';
 import {
   commitQuota,
   getQuotaSnapshots,
+  quotaTimeZoneFromRequest,
   QuotaExceededError,
   releaseQuota,
   reserveQuota
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
   const clientRegion = request.headers.get('x-aidol-client-region') === 'mainland'
     ? 'mainland'
     : 'overseas';
+  const timeZone = quotaTimeZoneFromRequest(request);
   const bodyPromise = request
     .json()
     .then((raw) => BodySchema.parse(raw))
@@ -134,7 +136,7 @@ export async function POST(request: Request) {
           // The lifetime theater quota is reserved below and committed only
           // after the opening reply succeeds.
         } else {
-          const quotas = await getQuotaSnapshots(userAccess.id, membership);
+          const quotas = await getQuotaSnapshots(userAccess.id, membership, timeZone);
           const trialUsed = (quotas.find((item) => item.key === 'theater_session')?.used ?? 0) > 0;
           if (!trialUsed) {
             return fail('The theater trial has not been started.', 403, 'THEATER_TRIAL_REQUIRED');
@@ -149,6 +151,7 @@ export async function POST(request: Request) {
         key: 'theater_session',
         idempotencyKey: `${requestId}:theater-session`,
         membership,
+        timeZone,
         metadata: { mode: body.mode, profileId: body.profileId }
       });
       theaterQuotaTransactionId = reservation.transactionId;
@@ -163,6 +166,7 @@ export async function POST(request: Request) {
           key: 'theater_reply',
           idempotencyKey: `${requestId}:theater-reply`,
           membership,
+          timeZone,
           metadata: { mode: body.mode, profileId: body.profileId }
         });
         theaterReplyQuotaTransactionId = theaterReplyReservation.transactionId;
@@ -173,6 +177,7 @@ export async function POST(request: Request) {
           key: 'message_send',
           idempotencyKey: `${requestId}:message-send`,
           membership,
+          timeZone,
           metadata: { mode: body.mode, profileId: body.profileId }
         });
         messageQuotaTransactionId = sendReservation.transactionId;
@@ -181,6 +186,7 @@ export async function POST(request: Request) {
           key: isVoiceLetter ? 'voice_letter' : 'chat_reply',
           idempotencyKey: `${requestId}:content`,
           membership,
+          timeZone,
           metadata: { mode: body.mode, profileId: body.profileId }
         });
         contentQuotaTransactionId = reservation.transactionId;
