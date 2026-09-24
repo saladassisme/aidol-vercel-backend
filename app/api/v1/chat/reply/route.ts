@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { fail, ok } from '@/lib/response';
 import { limitsForMember } from '@/lib/membership';
 import {
@@ -12,6 +13,7 @@ import {
 import {
   getCachedUserAccess,
   getOrCreateUserWithMembership,
+  sql,
   setCachedUserAccess
 } from '@/lib/db';
 import { generateChatReply, safeFallbackReply } from '@/lib/ai';
@@ -32,6 +34,8 @@ const BodySchema = z.object({
   nativeLanguageCode: z.string().optional(),
   targetLanguageCode: z.string().optional(),
   languageLevelCode: z.string().optional(),
+  groupChatID: z.string().uuid().optional(),
+  groupTurnID: z.string().uuid().optional(),
   studyVocabularyEntries: z.array(z.object({
     term: z.string(),
     explanation: z.string(),
@@ -126,6 +130,55 @@ export async function POST(request: Request) {
     logStep('auth.ok');
     logStep('body.ok');
     logStep('membership.ok', { isMember: membership.isMember, plan: membership.plan });
+    let groupTurnContext: { turnID: string; profileID: string } | null = null;
+    if (body.groupChatID || body.groupTurnID) {
+      if (!body.groupChatID || !body.groupTurnID || !body.profileId) {
+        return fail('Incomplete group turn context.', 400, 'INVALID_GROUP_TURN');
+      }
+      const latestUserMessage = [...body.messages].reverse().find((message) => message.role === 'user')?.content.trim();
+      if (!latestUserMessage) return fail('A group turn requires a user message.', 400, 'INVALID_GROUP_TURN');
+      const ownedGroups = await sql<{ id: string }[]>`
+        select id from group_chats
+        where id = ${body.groupChatID}
+          and user_id = ${userAccess.id}
+          and member_profile_ids ? ${body.profileId}
+        limit 1
+      `;
+      if (!ownedGroups[0]) return fail('Group chat or responder not found.', 404, 'GROUP_NOT_FOUND');
+
+      const messageHash = createHash('sha256')
+        .update(`${body.groupChatID}\n${latestUserMessage}`)
+        .digest('hex');
+      await sql`
+        insert into group_chat_turns (id, group_chat_id, user_id, message_hash)
+        values (${body.groupTurnID}, ${body.groupChatID}, ${userAccess.id}, ${messageHash})
+        on conflict (id) do nothing
+      `;
+      const turns = await sql<{ message_hash: string; created_at: string }[]>`
+        select message_hash, created_at from group_chat_turns
+        where id = ${body.groupTurnID}
+          and group_chat_id = ${body.groupChatID}
+          and user_id = ${userAccess.id}
+        limit 1
+      `;
+      const turn = turns[0];
+      if (!turn || turn.message_hash !== messageHash) {
+        return fail('Group turn does not match this message.', 409, 'GROUP_TURN_MISMATCH');
+      }
+      if (Date.now() - new Date(turn.created_at).getTime() > 60 * 60 * 1000) {
+        return fail('Group turn has expired.', 409, 'GROUP_TURN_EXPIRED');
+      }
+      const cachedReplies = await sql<{ reply_payload: Awaited<ReturnType<typeof generateChatReply>> }[]>`
+        select reply_payload from group_chat_turn_replies
+        where turn_id = ${body.groupTurnID} and profile_id = ${body.profileId}
+        limit 1
+      `;
+      if (cachedReplies[0]) {
+        logStep('group.reply.cached');
+        return ok({ reply: cachedReplies[0].reply_payload, quota: { remaining: 0, limit: membership.limits.dailyChatReplies } });
+      }
+      groupTurnContext = { turnID: body.groupTurnID, profileID: body.profileId };
+    }
     const isTheaterSessionStart = request.headers.get('x-aidol-theater-session-start') === '1';
     const isTheaterDialogue = body.mode === 'theater';
     const isVoiceLetter = body.mode === 'voice_letter';
@@ -175,7 +228,9 @@ export async function POST(request: Request) {
         const sendReservation = await reserveQuota({
           userId: userAccess.id,
           key: 'message_send',
-          idempotencyKey: `${requestId}:message-send`,
+          idempotencyKey: groupTurnContext
+            ? `group-turn:${groupTurnContext.turnID}:message-send`
+            : `${requestId}:message-send`,
           membership,
           timeZone,
           metadata: { mode: body.mode, profileId: body.profileId }
@@ -184,7 +239,9 @@ export async function POST(request: Request) {
         const reservation = await reserveQuota({
           userId: userAccess.id,
           key: isVoiceLetter ? 'voice_letter' : 'chat_reply',
-          idempotencyKey: `${requestId}:content`,
+          idempotencyKey: groupTurnContext
+            ? `group-turn:${groupTurnContext.turnID}:reply:${groupTurnContext.profileID}`
+            : `${requestId}:content`,
           membership,
           timeZone,
           metadata: { mode: body.mode, profileId: body.profileId }
@@ -243,6 +300,13 @@ export async function POST(request: Request) {
       if (messageQuotaTransactionId) await commitQuota(messageQuotaTransactionId);
       if (theaterQuotaTransactionId) await commitQuota(theaterQuotaTransactionId);
       if (theaterReplyQuotaTransactionId) await commitQuota(theaterReplyQuotaTransactionId);
+      if (groupTurnContext) {
+        await sql`
+          insert into group_chat_turn_replies (turn_id, profile_id, reply_payload)
+          values (${groupTurnContext.turnID}, ${groupTurnContext.profileID}, ${sql.json(reply)})
+          on conflict (turn_id, profile_id) do nothing
+        `;
+      }
       logStep('model.ok', { replyChars: reply.reply.length });
 
       logStep('success', { totalMs: Date.now() - startedAt });
@@ -266,8 +330,16 @@ export async function POST(request: Request) {
         if (theaterReplyQuotaTransactionId) await commitQuota(theaterReplyQuotaTransactionId).catch(() => {});
         console.warn('[aidol] chat.reply using safe fallback', { requestId, stage, message });
         logStep('fallback.ok');
+        const fallbackReply = safeFallbackReply(body.targetLanguageCode, body.nativeLanguageCode, body.mode);
+        if (groupTurnContext) {
+          await sql`
+            insert into group_chat_turn_replies (turn_id, profile_id, reply_payload)
+            values (${groupTurnContext.turnID}, ${groupTurnContext.profileID}, ${sql.json(fallbackReply)})
+            on conflict (turn_id, profile_id) do nothing
+          `;
+        }
         return ok({
-          reply: safeFallbackReply(body.targetLanguageCode, body.nativeLanguageCode, body.mode),
+          reply: fallbackReply,
           quota
         });
       }

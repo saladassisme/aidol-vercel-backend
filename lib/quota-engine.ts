@@ -111,7 +111,7 @@ export async function reserveQuota(params: {
   const policy = quotaPolicy(params.key, params.membership);
   if (policy.limit <= 0) throw new QuotaExceededError(params.key);
   const periodKey = await periodKeyFor(policy.period, params.timeZone ?? 'UTC');
-  const transactionId = crypto.randomUUID();
+  const newTransactionId = crypto.randomUUID();
 
   return sql.begin(async (tx) => {
     const prior = await tx<{
@@ -152,16 +152,31 @@ export async function reserveQuota(params: {
     `;
     if (!usage[0]) throw new QuotaExceededError(params.key);
 
+    if (prior[0]?.status === 'released') {
+      await tx`
+        update quota_transactions
+        set period_key = ${periodKey}, status = 'reserved', metadata = ${tx.json(params.metadata ?? {})}, updated_at = now()
+        where id = ${prior[0].id}
+      `;
+      return {
+        transactionId: prior[0].id,
+        key: params.key,
+        periodKey,
+        limit: policy.limit,
+        status: 'reserved' as const
+      };
+    }
+
     await tx`
       insert into quota_transactions (
         id, user_id, quota_key, period_key, idempotency_key, status, metadata
       ) values (
-        ${transactionId}, ${params.userId}, ${params.key}, ${periodKey},
+        ${newTransactionId}, ${params.userId}, ${params.key}, ${periodKey},
         ${params.idempotencyKey}, 'reserved', ${tx.json(params.metadata ?? {})}
       )
     `;
     return {
-      transactionId,
+      transactionId: newTransactionId,
       key: params.key,
       periodKey,
       limit: policy.limit,
