@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   if (!id || !/^[0-9a-f-]{36}$/i.test(id) || !name || memberProfileIDs.length < 2 || memberProfileIDs.length > 5) return fail('A group chat needs a valid id, 2 to 5 AI members, and a name.');
   const rows = await sql`
     insert into group_chats (id, user_id, name, member_profile_ids, preferred_mode)
-    values (${id}, ${auth.userId}, ${name}, ${JSON.stringify(memberProfileIDs)}::jsonb, ${preferredMode})
+    values (${id}, ${auth.userId}, ${name}, ${sql.json(memberProfileIDs)}::jsonb, ${preferredMode})
     on conflict (id) do update set
       name = excluded.name,
       member_profile_ids = excluded.member_profile_ids,
