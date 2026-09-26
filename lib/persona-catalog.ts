@@ -1,4 +1,5 @@
 import seedCatalogJSON from '@/data/personas-v7.json';
+import onboardingCatalogJSON from '@/data/onboarding-personas.json';
 import { sql } from '@/lib/db';
 
 export type PersonaCatalogSeedItem = {
@@ -79,7 +80,7 @@ export type PersonaCatalogItem = {
   searchAliases: string[];
   persona: PersonaCatalogStyle;
   targetLanguages: string[];
-  avatarURL?: string;
+  avatarURL?: string | null;
   welcomeAudio?: {
     intro: Record<string, string>;
     greeting: Record<string, string>;
@@ -90,6 +91,20 @@ export type PersonaCatalogItem = {
 export type PersonaCatalogPayload = {
   version: string;
   personas: PersonaCatalogItem[];
+  onboarding: PersonaCatalogOnboardingConfig;
+};
+
+export type PersonaCatalogOnboardingConfig = {
+  version: string;
+  maxItems: number;
+  personas: PersonaCatalogOnboardingItem[];
+};
+
+export type PersonaCatalogOnboardingItem = {
+  key: string;
+  displayName: string;
+  group: string;
+  avatarURL?: string | null;
 };
 
 export type ResolvedPersonaCatalogPrompt = {
@@ -102,6 +117,8 @@ type PersonaSeedCatalog = {
   version: string;
   personas: PersonaCatalogSeedItem[];
 };
+
+const onboardingCatalog = onboardingCatalogJSON as PersonaCatalogOnboardingConfig;
 
 const seedCatalog = seedCatalogJSON as PersonaSeedCatalog;
 
@@ -247,7 +264,8 @@ export function buildPersonaCatalogSeedPayload(resourceBaseURL: string): Persona
       .filter((item) => item.isEnabled)
       .slice()
       .sort((left, right) => (left.displayOrder - right.displayOrder) || left.key.localeCompare(right.key))
-      .map((item) => seedItemToCatalogItem(item, resourceBaseURL))
+      .map((item) => seedItemToCatalogItem(item, resourceBaseURL)),
+    onboarding: onboardingCatalog
   };
 }
 
@@ -378,6 +396,7 @@ export function personaCatalogRowsToPayload(
           greeting: Object.fromEntries(Object.entries(resolveAssetMap(row.welcome_greeting_audio_paths, resourceBaseURL)).map(([language, url]) => [language, withCacheVersion(url, row.updated_at)]))
         },
         hasVoice: row.has_voice
-      }))
+      })),
+    onboarding: onboardingCatalog
   };
 }

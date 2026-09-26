@@ -1,0 +1,36 @@
+{
+  "version": "onboarding-v1",
+  "maxItems": 5,
+  "personas": [
+    {
+      "key": "01_cortis_keonho",
+      "displayName": "Character 1",
+      "group": "AI character",
+      "avatarURL": null
+    },
+    {
+      "key": "02_cortis_martin",
+      "displayName": "Character 2",
+      "group": "AI character",
+      "avatarURL": null
+    },
+    {
+      "key": "03_cortis_james",
+      "displayName": "Character 3",
+      "group": "AI character",
+      "avatarURL": null
+    },
+    {
+      "key": "04_cortis_juhoon",
+      "displayName": "Character 4",
+      "group": "AI character",
+      "avatarURL": null
+    },
+    {
+      "key": "05_cortis_seonghyeon",
+      "displayName": "Character 5",
+      "group": "AI character",
+      "avatarURL": null
+    }
+  ]
+}
