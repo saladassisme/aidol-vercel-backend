@@ -96,15 +96,7 @@ export type PersonaCatalogPayload = {
 
 export type PersonaCatalogOnboardingConfig = {
   version: string;
-  maxItems: number;
-  personas: PersonaCatalogOnboardingItem[];
-};
-
-export type PersonaCatalogOnboardingItem = {
-  key: string;
-  displayName: string;
-  group: string;
-  avatarURL?: string | null;
+  personaKeys: string[];
 };
 
 export type ResolvedPersonaCatalogPrompt = {
