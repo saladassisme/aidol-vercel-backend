@@ -1,5 +1,5 @@
 import seedCatalogJSON from '@/data/personas-v7.json';
-import onboardingCatalogJSON from '@/data/onboarding-personas.json';
+import launchCatalogJSON from '@/data/launch-personas.json';
 import { sql } from '@/lib/db';
 
 export type PersonaCatalogSeedItem = {
@@ -110,7 +110,12 @@ type PersonaSeedCatalog = {
   personas: PersonaCatalogSeedItem[];
 };
 
-const onboardingCatalog = onboardingCatalogJSON as PersonaCatalogOnboardingConfig;
+const launchCatalog = launchCatalogJSON as PersonaCatalogOnboardingConfig;
+const launchPersonaKeySet = new Set(launchCatalog.personaKeys);
+
+function isLaunchPersona(key: string) {
+  return launchPersonaKeySet.has(key);
+}
 
 const seedCatalog = seedCatalogJSON as PersonaSeedCatalog;
 
@@ -253,11 +258,11 @@ export function buildPersonaCatalogSeedPayload(resourceBaseURL: string): Persona
   return {
     version: seedCatalog.version,
     personas: seedCatalog.personas
-      .filter((item) => item.isEnabled)
+      .filter((item) => item.isEnabled && isLaunchPersona(item.key))
       .slice()
       .sort((left, right) => (left.displayOrder - right.displayOrder) || left.key.localeCompare(right.key))
       .map((item) => seedItemToCatalogItem(item, resourceBaseURL)),
-    onboarding: onboardingCatalog
+    onboarding: launchCatalog
   };
 }
 
@@ -372,7 +377,7 @@ export function personaCatalogRowsToPayload(
   return {
     version: `${sourceVersion}-${rows.length}-${latestUpdate}`,
     personas: rows
-      .filter((row) => row.is_enabled)
+      .filter((row) => row.is_enabled && isLaunchPersona(row.persona_key))
       .sort((left, right) => (left.display_order - right.display_order) || left.persona_key.localeCompare(right.persona_key))
       .map((row) => ({
         key: row.persona_key,
@@ -389,6 +394,6 @@ export function personaCatalogRowsToPayload(
         },
         hasVoice: row.has_voice
       })),
-    onboarding: onboardingCatalog
+    onboarding: launchCatalog
   };
 }

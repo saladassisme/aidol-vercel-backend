@@ -1,0 +1,10 @@
+{
+  "version": "launch-v3-temporary-wechat-roles",
+  "personaKeys": [
+    "temp_wechat_01",
+    "temp_wechat_02",
+    "temp_wechat_03",
+    "temp_wechat_04",
+    "temp_wechat_05"
+  ]
+}
