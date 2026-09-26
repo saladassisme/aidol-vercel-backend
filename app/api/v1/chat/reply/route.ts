@@ -137,15 +137,13 @@ export async function POST(request: Request) {
       }
       const latestUserMessage = [...body.messages].reverse().find((message) => message.role === 'user')?.content.trim();
       if (!latestUserMessage) return fail('A group turn requires a user message.', 400, 'INVALID_GROUP_TURN');
-      const ownedGroups = await sql<{ id: string }[]>`
-        select id from group_chats
-        where id = ${body.groupChatID}
-          and user_id = ${userAccess.id}
-          and member_profile_ids ? ${body.profileId}
-        limit 1
+      // Turn records are only a short-lived idempotency window. The chat
+      // transcript itself remains local to the device.
+      await sql`
+        delete from group_chat_turns
+        where user_id = ${userAccess.id}
+          and created_at < now() - interval '2 hours'
       `;
-      if (!ownedGroups[0]) return fail('Group chat or responder not found.', 404, 'GROUP_NOT_FOUND');
-
       const messageHash = createHash('sha256')
         .update(`${body.groupChatID}\n${latestUserMessage}`)
         .digest('hex');

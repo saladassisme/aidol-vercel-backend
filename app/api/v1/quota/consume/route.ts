@@ -1,6 +1,5 @@
 import { fail, ok } from '@/lib/response';
 import { isResponse, requireAuth } from '@/lib/auth';
-import { assertAndConsumeQuota } from '@/lib/quota';
 import { commitQuota, quotaTimeZoneFromRequest, QuotaExceededError, reserveQuota } from '@/lib/quota-engine';
 import { getMembership } from '@/lib/membership';
 import { logIncomingRequest } from '@/lib/request-log';
@@ -27,16 +26,28 @@ export async function POST(request: Request) {
       await commitQuota(reservation.transactionId);
       return ok({ kind: kindRaw, quota: { limit: reservation.limit } });
     }
-    const kind = kindRaw === 'tts'
-      ? 'tts'
-      : kindRaw === 'theater_session'
-        ? 'theater_session'
-        : 'chat';
-
-    const quota = await assertAndConsumeQuota(auth.userId, kind, undefined, timeZone);
-    return ok({ kind, quota });
+    const key = kindRaw === 'tts'
+      ? 'voice_reply'
+      : kindRaw === 'voice_clone'
+        ? 'voice_clone'
+        : kindRaw === 'theater_session'
+          ? 'theater_session'
+          : 'chat_reply';
+    const membership = await getMembership(auth.userId);
+    const reservation = await reserveQuota({
+      userId: auth.userId,
+      key,
+      idempotencyKey: request.headers.get('x-aidol-request-id')?.trim() || crypto.randomUUID(),
+      membership,
+      timeZone,
+      metadata: { source: 'quota.consume', kind: kindRaw }
+    });
+    await commitQuota(reservation.transactionId);
+    return ok({ kind: kindRaw, quota: { limit: reservation.limit } });
   } catch (error) {
-    if (error instanceof QuotaExceededError) return fail('Character creation limit reached.', 403, 'CHARACTER_CREATE_LIMIT');
+    if (error instanceof QuotaExceededError) {
+      return fail(`${error.key} quota exceeded.`, 403, `${error.key.toUpperCase()}_LIMIT`);
+    }
     return fail(error instanceof Error ? error.message : 'Unknown error', 500, 'QUOTA_CONSUME_FAILED');
   }
 }

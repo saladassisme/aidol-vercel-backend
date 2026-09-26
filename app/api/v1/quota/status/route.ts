@@ -1,8 +1,7 @@
 import { fail, ok } from '@/lib/response';
 import { limitsForMember } from '@/lib/membership';
-import { getOrCreateUserQuotaStatus } from '@/lib/quota';
 import { getQuotaSnapshots, quotaTimeZoneFromRequest } from '@/lib/quota-engine';
-import { setCachedUserAccess } from '@/lib/db';
+import { getOrCreateUserWithMembership, setCachedUserAccess } from '@/lib/db';
 import { logIncomingRequest } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
@@ -16,10 +15,7 @@ export async function GET(request: Request) {
     }
 
     const timeZone = quotaTimeZoneFromRequest(request);
-    const row = await getOrCreateUserQuotaStatus(deviceId, timeZone);
-    if (!row) {
-      throw new Error('Unable to resolve user access.');
-    }
+    const row = await getOrCreateUserWithMembership(deviceId);
     setCachedUserAccess(deviceId, {
       id: row.id,
       device_id: row.device_id,
